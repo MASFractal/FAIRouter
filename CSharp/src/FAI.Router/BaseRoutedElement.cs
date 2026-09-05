@@ -47,11 +47,11 @@ public class BaseRoutedElement
     /// <param name="features">Признаки запроса</param>
     public double GetRScore(InputFeatures features)
     {
-        double t = features.LenAnswer / TPS; // time
+        double t = features.LenAnswer / (TPS+0.1); // time
         double c = (DPMTInp * features.InputLen + DPMTOutp * features.LenAnswer) * 1e-6; // cost
         double q = GetQualityScore(features.FeatureVector);
         double nom = Settings.WQ * q - Settings.WC * c;
-        double denom = Settings.Wt * Math.Log(t + 1);
+        double denom = Settings.Wt * Math.Log(t + 2);
         return nom / denom;
     }
 }

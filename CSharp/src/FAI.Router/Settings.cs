@@ -14,4 +14,10 @@ public class Settings
     /// Размерность пространства признаков
     /// </summary>
     public static int FeaturesDim { get; set; } = 3;
+
+
+    /// <summary>
+    /// Размерность пространства признаков спецификации
+    /// </summary>
+    public static int FeaturesSpecDim { get; set; } = 4;
 }
