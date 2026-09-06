@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using FAI.Router.Enums;
 
 namespace FAI.Router;
 
@@ -17,7 +18,18 @@ public class Settings
 
 
     /// <summary>
-    /// Размерность пространства признаков спецификации
+    /// Число числовых метрик в Specifications (кроме one-hot стиля):
+    /// SymbolLength, WordLength, ParagraphCount, SectionCount, ListItemCount,
+    /// TableCount, CodeBlockCount, FormulaCount, HeadingDepth, AvgSentenceLength,
+    /// ReadabilityScore, TermDensity, FormalityScore, KeywordCoverage
     /// </summary>
-    public static int FeaturesSpecDim { get; set; } = 4;
+    private const int SpecNumericFeaturesCount = 14;
+
+    /// <summary>
+    /// Размерность пространства признаков спецификации:
+    /// one-hot стиля (Style) + числовые метрики. Вычисляется, а не задаётся
+    /// константой, чтобы не расходиться с Specifications.FeaturesSpecificationVector
+    /// при добавлении новых стилей или метрик.
+    /// </summary>
+    public static int FeaturesSpecDim => Enum.GetValues<Style>().Length + SpecNumericFeaturesCount;
 }

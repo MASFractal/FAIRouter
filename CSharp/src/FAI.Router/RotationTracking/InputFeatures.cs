@@ -1,6 +1,6 @@
 ﻿using AI.DataStructs.Algebraic;
 
-namespace FAI.Router;
+namespace FAI.Router.RotationTracking;
 
 /// <summary>
 /// Признаки входа

@@ -1,4 +1,6 @@
-﻿namespace FAI.Router;
+﻿using FAI.Router.Services;
+
+namespace FAI.Router;
 
 
 /// <summary>

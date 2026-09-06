@@ -1,7 +1,11 @@
 ﻿using AI.DataStructs.Algebraic;
 
-namespace FAI.Router;
+namespace FAI.Router.JudgeLogic;
 
+
+/// <summary>
+/// Судья, автоматическая оценка качества решения
+/// </summary>
 public class Judge
 {
     /// <summary>
@@ -31,9 +35,4 @@ public class Judge
     /// <returns></returns>
     /// <exception cref="NotImplementedException"></exception>
     public Specifications GetSpec(string answer) => throw new NotImplementedException();
-}
-
-public class Specifications 
-{
-    public Vector FeaturesSpecificationVector { get; set; } = new Vector(Settings.FeaturesSpecDim)+1;
 }

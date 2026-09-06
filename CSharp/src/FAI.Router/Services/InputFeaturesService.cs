@@ -1,4 +1,6 @@
-﻿namespace FAI.Router;
+﻿using FAI.Router.RotationTracking;
+
+namespace FAI.Router.Services;
 
 /// <summary>
 /// Сервис вычисления признаков входа

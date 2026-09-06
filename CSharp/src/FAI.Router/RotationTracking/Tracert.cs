@@ -1,4 +1,4 @@
-﻿namespace FAI.Router;
+﻿namespace FAI.Router.RotationTracking;
 
 /// <summary>
 /// Трассировка хода

@@ -1,4 +1,6 @@
-﻿namespace FAI.Router;
+﻿using FAI.Router.Enums;
+
+namespace FAI.Router.RotationTracking;
 
 /// <summary>
 /// Отзыв на результат
@@ -15,13 +17,4 @@ public class Feedback
     /// Агрегированная оценка
     /// </summary>
     public double FeadbackScore { get; set; }
-}
-
-/// <summary>
-/// Тип фидбека
-/// </summary>
-public enum FeedbackType 
-{
-    Human = 1,
-    Auto = 2
 }
