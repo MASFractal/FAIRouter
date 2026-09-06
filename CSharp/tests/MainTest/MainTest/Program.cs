@@ -1,5 +1,6 @@
 ﻿using AI.DataStructs.Algebraic;
 using FAI.Router;
+using FAI.Router.RoutedElements;
 
 BaseRoutedElement element1 = new BaseRoutedElement() { Name = "Sonnet 4.6"};
 BaseRoutedElement element2 = new BaseRoutedElement() { Name = "Gemmini 2.5 Flash"};

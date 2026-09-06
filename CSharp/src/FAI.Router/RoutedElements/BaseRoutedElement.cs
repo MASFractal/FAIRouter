@@ -1,7 +1,7 @@
 ﻿using AI.DataStructs.Algebraic;
 using FAI.Router.RotationTracking;
 
-namespace FAI.Router;
+namespace FAI.Router.RoutedElements;
 
 /// <summary>
 /// Базовый элемент для роутинга
@@ -17,7 +17,7 @@ public class BaseRoutedElement
     /// <summary>
     /// Вектор для сравнения 
     /// </summary>
-    public Vector IdealMatchVector { get; set; } = new Vector(Settings.FeaturesDim) + 1.0/Settings.FeaturesDim; // Простое среднее признаков
+    public Vector IdealMatchVector { get; set; } = new Vector(Settings.FeaturesDim + Settings.FeaturesSpecDim) + 1.0/Settings.FeaturesDim; // Простое среднее признаков
 
     /// <summary>
     /// Число токенов в секунду
