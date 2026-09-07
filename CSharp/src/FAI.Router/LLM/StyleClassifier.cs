@@ -70,11 +70,15 @@ public class StyleClassifier
                 termDensity = new
                 {
                     type = "number",
-                    description = "Доля терминологии и иностранных слов, 0-1"
+                    minimum = 0,
+                    maximum = 1,
+                    description = SpecFieldDescriptions.TermDensity
                 },
                 formalityScore = new
                 {
                     type = "number",
+                    minimum = 0,
+                    maximum = 1,
                     description = "Формальность тона, 0-1"
                 }
             },

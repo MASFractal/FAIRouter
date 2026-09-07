@@ -1,4 +1,5 @@
 ﻿using AI.DataStructs.Algebraic;
+using System.Text.Json.Serialization;
 using FAI.Router.Enums;
 
 namespace FAI.Router.JudgeLogic;
@@ -17,6 +18,13 @@ public class Specifications
     private const double HeadingDepthScale = 6;
     private const double SentenceLengthScale = 40;
     private const double ReadabilityMax = 100;
+
+    // Доли приходят от модели, а она границы схемы соблюдает не всегда: DeepSeek возвращал
+    // termDensity 4 и 80 при объявленных 0-1. Такое значение забивает норму вектора целиком,
+    // поэтому границу держит сам тип, а не только схема ответа.
+    private double _readabilityScore;
+    private double _termDensity;
+    private double _formalityScore;
 
     /// <summary>
     /// Распознаваемый тип стиля (стиль - представлен one-hot вектором)
@@ -80,19 +88,31 @@ public class Specifications
     public double AvgSentenceLength { get; set; }
 
     /// <summary>
-    /// Читаемость текста (индекс Флеша-Кинкейда или аналог)
+    /// Читаемость текста (индекс Флеша-Кинкейда или аналог), 0-100
     /// </summary>
-    public double ReadabilityScore { get; set; }
+    public double ReadabilityScore
+    {
+        get => _readabilityScore;
+        set => _readabilityScore = Math.Clamp(value, 0, ReadabilityMax);
+    }
 
     /// <summary>
-    /// Доля терминологии/иностранных слов
+    /// Доля терминологии/иностранных слов, 0-1
     /// </summary>
-    public double TermDensity { get; set; }
+    public double TermDensity
+    {
+        get => _termDensity;
+        set => _termDensity = Math.Clamp(value, 0, 1);
+    }
 
     /// <summary>
-    /// Формальность тона
+    /// Формальность тона, 0-1
     /// </summary>
-    public double FormalityScore { get; set; }
+    public double FormalityScore
+    {
+        get => _formalityScore;
+        set => _formalityScore = Math.Clamp(value, 0, 1);
+    }
 
     #endregion
 
@@ -113,6 +133,12 @@ public class Specifications
     /// <summary>
     /// Вектор признаков
     /// </summary>
+    /// <remarks>
+    /// Вычисляется из остальных полей, поэтому в сохранённый вид не попадает: иначе накопитель
+    /// хранил бы одни и те же данные дважды, а при смене масштабов старые копии разошлись бы
+    /// с тем, что даёт текущий код.
+    /// </remarks>
+    [JsonIgnore]
     public Vector FeaturesSpecificationVector => GetVector();
 
     // Формирования вектора признаков

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -10,6 +10,11 @@
     <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI\AI.csproj" />
     <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI.LLM\AI.LLM.csproj" />
     <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI.NLP\AI.NLP.csproj" />
+    <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI.NeuralNetworks\AI.NeuralNetworks.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
   </ItemGroup>
 
 </Project>

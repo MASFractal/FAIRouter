@@ -456,3 +456,7 @@ TestResults/
 !.env.example
 secrets.json
 appsettings.*.local.json
+
+# Секреты: ключи API не коммитятся
+key.txt
+*.key

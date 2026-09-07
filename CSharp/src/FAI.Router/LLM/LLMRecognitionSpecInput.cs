@@ -1,4 +1,5 @@
 ﻿using AI.LLM.Core.Models.Common.Requests;
+using AI.LLM.Core.Models.Common.Messages;
 using AI.LLM.Services.LLM;
 using FAI.Router.Enums;
 using FAI.Router.JudgeLogic;
@@ -63,7 +64,11 @@ public class LLMRecognitionSpecInput
 
         string promptForModel = PromptTmpl.Replace("{text}", prompt);
 
-        string json = await Settings.LLM.SendToLLM(promptForModel, _settings).ConfigureAwait(false);
+        // Сообщение собирается явно: перегрузка SendToLLM(string) подставляет системным сообщением
+        // промпт КЛИЕНТА, а он у общего Settings.LLM не задан — провайдер отвергает content = null
+        List<LLMMessage> messages = [new LLMMessage(LLMMessage.UserRole, promptForModel)];
+
+        string json = await Settings.LLM.SendToLLM(messages, _settings).ConfigureAwait(false);
         return JsonSerializer.Deserialize<Specifications>(json, JsonOptions) ?? new Specifications();
     }
 
@@ -88,9 +93,9 @@ public class LLMRecognitionSpecInput
                 "formulaCount": { "type": "integer", "description": "Число формул" },
                 "headingDepth": { "type": "integer", "description": "Глубина вложенности заголовков" },
                 "avgSentenceLength": { "type": "number", "description": "Средняя длина предложения в словах" },
-                "readabilityScore": { "type": "number", "description": "Читаемость по Флешу-Кинкейду, 0-100" },
-                "termDensity": { "type": "number", "description": "Доля терминологии, 0-1" },
-                "formalityScore": { "type": "number", "description": "Формальность тона, 0-1" },
+                "readabilityScore": { "type": "number", "minimum": 0, "maximum": 100, "description": "Читаемость по Флешу-Кинкейду, 0-100" },
+                "termDensity": { "type": "number", "minimum": 0, "maximum": 1, "description": "{{SpecFieldDescriptions.TermDensity}}" },
+                "formalityScore": { "type": "number", "minimum": 0, "maximum": 1, "description": "Формальность тона, 0-1" },
                 "language": { "type": "string", "description": "Язык ответа, код ISO 639-1" },
                 "hasReferences": { "type": "boolean", "description": "Нужны ли ссылки на источники" }
               },

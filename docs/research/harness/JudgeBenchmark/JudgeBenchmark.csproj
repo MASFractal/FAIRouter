@@ -8,10 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\FAI.Router\FAI.Router.csproj" />
+    <ProjectReference Include="..\..\..\..\CSharp\src\FAI.Router\FAI.Router.csproj" />
   </ItemGroup>
 
-  <!-- Ключ OpenRouter: лежит рядом с проектом, в git не попадает (см. .gitignore) -->
+  <!-- Ключ OpenRouter: в git не попадает (см. .gitignore) -->
   <ItemGroup>
     <None Include="key.txt" Condition="Exists('key.txt')" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

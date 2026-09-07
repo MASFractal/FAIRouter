@@ -1,4 +1,4 @@
-﻿using FAI.Router.RotationTracking;
+using FAI.Router.RotationTracking;
 
 namespace FAI.Router.Services;
 
@@ -12,8 +12,22 @@ public class InputFeaturesService
     /// </summary>
     public const double EST_SYMBOL_PER_TOKEN = 3.0;
 
+    private static readonly SpecInputService SpecService = new();
+
     /// <summary>
-    /// Отдает признаки текста (промпта)
+    /// Полные признаки запроса: объём оценивается арифметикой, ТЗ распознаёт модель
+    /// </summary>
+    /// <param name="text">Текст запроса</param>
+    public static async Task<InputFeatures> GetFeaturesAsync(string text)
+    {
+        InputFeatures features = GetFeatures(text);
+        features.InputSpecifications = await SpecService.GetSpecificationsAsync(text).ConfigureAwait(false);
+
+        return features;
+    }
+
+    /// <summary>
+    /// Отдает признаки объёма текста (промпта) без обращения к модели
     /// </summary>
     /// <param name="text">Текст</param>
     public static InputFeatures GetFeatures(string text) 
