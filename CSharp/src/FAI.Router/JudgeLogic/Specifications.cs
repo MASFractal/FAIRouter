@@ -94,11 +94,6 @@ public class Specifications
     public string? Language { get; set; }
 
     /// <summary>
-    /// Доля покрытия ключевых слов/сущностей из промпта
-    /// </summary>
-    public double KeywordCoverage { get; set; }
-
-    /// <summary>
     /// Наличие ссылок/источников
     /// </summary>
     public bool HasReferences { get; set; }
@@ -131,8 +126,7 @@ public class Specifications
             AvgSentenceLength,
             ReadabilityScore,
             TermDensity,
-            FormalityScore,
-            KeywordCoverage
+            FormalityScore
         ];
         return featuresVector;
     }

@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI\AI.csproj" />
+    <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI.LLM\AI.LLM.csproj" />
+    <ProjectReference Include="..\..\..\..\AIFramework3Open\src\AI.NLP\AI.NLP.csproj" />
   </ItemGroup>
 
 </Project>

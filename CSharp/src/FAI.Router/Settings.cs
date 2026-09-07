@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using AI.LLM.Services.LLM;
 using FAI.Router.Enums;
 
 namespace FAI.Router;
@@ -10,6 +11,18 @@ public class Settings
     public static double WQ { get; set; } = 0.5;
     public static double Wt { get; set; } = 0.25;
     public static double WC { get; set; } = 0.25;
+
+    private static LLMBase? _llm;
+
+    /// <summary>
+    /// Модель для работы системы. Назначается один раз при старте приложения.
+    /// </summary>
+    public static LLMBase LLM
+    {
+        get => _llm ?? throw new InvalidOperationException(
+            "Settings.LLM не задан: назначьте клиент LLM до обращения к сервисам распознавания.");
+        set => _llm = value;
+    }
 
     /// <summary>
     /// Размерность пространства признаков
@@ -21,9 +34,9 @@ public class Settings
     /// Число числовых метрик в Specifications (кроме one-hot стиля):
     /// SymbolLength, WordLength, ParagraphCount, SectionCount, ListItemCount,
     /// TableCount, CodeBlockCount, FormulaCount, HeadingDepth, AvgSentenceLength,
-    /// ReadabilityScore, TermDensity, FormalityScore, KeywordCoverage
+    /// ReadabilityScore, TermDensity, FormalityScore
     /// </summary>
-    private const int SpecNumericFeaturesCount = 14;
+    private const int SpecNumericFeaturesCount = 13;
 
     /// <summary>
     /// Размерность пространства признаков спецификации:
