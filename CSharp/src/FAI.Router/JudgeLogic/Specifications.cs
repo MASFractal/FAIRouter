@@ -8,6 +8,16 @@ namespace FAI.Router.JudgeLogic;
 /// </summary>
 public class Specifications
 {
+    // Типичный масштаб поля. Вектор сравнивается косинусом, поэтому координаты обязаны быть
+    // соизмеримы: в сырых единицах объём в символах давал 98% нормы вектора, и косинус мерил
+    // только длину — текст в противоположном стиле получал оценку 0,9998.
+    private const double SymbolLengthScale = 20000;
+    private const double WordLengthScale = 3000;
+    private const double CountScale = 20;
+    private const double HeadingDepthScale = 6;
+    private const double SentenceLengthScale = 40;
+    private const double ReadabilityMax = 100;
+
     /// <summary>
     /// Распознаваемый тип стиля (стиль - представлен one-hot вектором)
     /// </summary>
@@ -114,22 +124,28 @@ public class Specifications
         Vector featuresVector =
         [
             .. Style2Vector(),
-            SymbolLength,
-            WordLength,
-            ParagraphCount,
-            SectionCount,
-            ListItemCount,
-            TableCount,
-            CodeBlockCount,
-            FormulaCount,
-            HeadingDepth,
-            AvgSentenceLength,
-            ReadabilityScore,
+            Scaled(SymbolLength, SymbolLengthScale),
+            Scaled(WordLength, WordLengthScale),
+            Scaled(ParagraphCount, CountScale),
+            Scaled(SectionCount, CountScale),
+            Scaled(ListItemCount, CountScale),
+            Scaled(TableCount, CountScale),
+            Scaled(CodeBlockCount, CountScale),
+            Scaled(FormulaCount, CountScale),
+            Scaled(HeadingDepth, HeadingDepthScale),
+            Scaled(AvgSentenceLength, SentenceLengthScale),
+            ReadabilityScore / ReadabilityMax,
             TermDensity,
             FormalityScore
         ];
         return featuresVector;
     }
+
+    // Логарифмическая шкала: у объёмов и счётчиков значимо отношение величин, а не разница,
+    // а деление на масштаб приводит поле к единичному порядку. Отрицательное значение может
+    // прийти от модели, распознающей ТЗ, — логарифм на нём даёт NaN и портит весь вектор.
+    private static double Scaled(double value, double scale) =>
+        Math.Log(1 + Math.Max(0, value)) / Math.Log(1 + scale);
 
     private Vector Style2Vector()
     {

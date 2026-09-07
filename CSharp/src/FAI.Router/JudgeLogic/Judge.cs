@@ -29,6 +29,16 @@ public class Judge
     }
 
     /// <summary>
+    /// Режим критика: расхождения между ТЗ и фактом по каждому пункту.
+    /// В отличие от GetScore сравнивает пункты по отдельности, без вектора и матрицы —
+    /// поэтому объяснимо для человека и не зависит от масштаба координат.
+    /// </summary>
+    /// <param name="inputSpec">Запрашиваемые параметры</param>
+    /// <param name="actualSpec">Фактические параметры ответа</param>
+    public static DiffSpec Criticize(Specifications inputSpec, Specifications actualSpec) =>
+        DiffSpec.Compare(inputSpec, actualSpec);
+
+    /// <summary>
     /// Фактическая спецификация выхода
     /// </summary>
     /// <param name="answer">Ответ</param>
