@@ -47,6 +47,34 @@ fai_router/
 └── catalog.py          цены и возможности моделей у поставщика
 ```
 
+## Фасад и сервер
+
+`FaiRouter` собирает весь контур в один объект: выбор, выполнение с запасным вариантом, замер,
+оценка судьи, журнал, отзывы и обучение.
+
+```python
+from fai_router import FaiRouter
+
+router = FaiRouter.from_openrouter("ключ", ["google/gemini-2.5-flash", "openai/gpt-4.1-mini"],
+                                   database_path="fai-router.db")
+answer = router.ask("Напиши научный обзор на 1500 знаков")
+router.feedback(answer.round_id, 1.0)
+router.train(epochs=10)
+router.save()
+```
+
+Исполнителя можно задать своего: функция получает кандидата и сообщения диалога и возвращает
+текст либо `Completion` с расходом токенов.
+
+`fai_router.server` поднимает сервер, совместимый с OpenAI chat completions, для OpenClaw и любого
+другого клиента:
+
+```bash
+python -m fai_router.server --models google/gemini-2.5-flash,openai/gpt-4.1-mini --db fai-router.db
+```
+
+Подключение к OpenClaw описано в [корневом README](../README.md).
+
 ## Использование
 
 ```python

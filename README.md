@@ -38,6 +38,120 @@ FAIRouter выбирает исполнителя сам, а затем пров
 * **Становиться точнее.** Отзывы копятся, веса обучаются, и кандидаты со временем расходятся по
   типам задач.
 
+## Кейсы
+
+**Агент или чат просит «любую подходящую модель».** OpenClaw, свой бот или сервис указывает
+модель `auto`, а FAIRouter на каждый запрос выбирает исполнителя из ваших моделей: дешевого там,
+где он справится, сильного там, где нужен. Подключение описано в разделе про OpenClaw ниже.
+
+**Счет за модели растет быстрее пользы.** Роутер ведет журнал ходов с ценой и оценкой, а веса
+метрики задают, сколько качества вы готовы отдать за экономию. Профиль «экономный» на проверке
+дал качество выше стратегии «всегда самая дешевая» при почти той же цене и впятеро дешевле самой
+дорогой модели.
+
+**Нужно знать, выполнено ли задание, а не только получить текст.** Судья сравнивает готовый
+ответ с распознанным заданием по шестнадцати пунктам и показывает, где именно расхождение:
+заказано 4 раздела и таблица, получено 1 раздел без таблицы. Работает и отдельно от роутинга, как
+приемка любого текста по его брифу.
+
+**Свои модели на своих типах задач.** Стенд из `docs/research` замеряет качество каждой модели на
+каждом вашем типе задач и превращает замер в начальные веса роутера: полезен с первого хода, а
+дальше уточняется на отзывах.
+
+## API
+
+Весь контур собран в один объект. Python:
+
+```python
+from fai_router import FaiRouter
+
+router = FaiRouter.from_openrouter(
+    api_key="...",
+    model_ids=["google/gemini-2.5-flash", "openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5"],
+    database_path="fai-router.db",
+)
+
+answer = router.ask("Напиши обзор методов кластеризации на 1500 знаков в научном стиле")
+print(answer.winner, answer.score)   # кто ответил и оценка судьи
+print(answer.critic)                 # расхождения с заданием по пунктам
+
+router.feedback(answer.round_id, 1.0)   # отзыв человека, если есть
+router.train(epochs=10)                 # обучение по журналу
+router.save()
+```
+
+C#:
+
+```csharp
+Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = "...", ModelName = "openai/gpt-4o-mini" });
+
+FaiRouter router = new(candidates, (candidate, prompt) => Ask(candidate.Name, prompt), "fai-router.db");
+
+RouterAnswer answer = await router.AskAsync("Напиши обзор методов кластеризации на 1500 знаков");
+Console.WriteLine($"{answer.Winner.Name}: {answer.Score}");
+Console.WriteLine(answer.Critic);
+
+router.Feedback(answer.RoundId!.Value, 1.0);
+router.Train(epochs: 10);
+router.Save();
+```
+
+Кандидатов в C# можно собрать из каталога через `ModelCatalog.CreateElement`, а ответы получать
+любым способом: делегат исполнителя получает кандидата и запрос и возвращает текст. Все элементы
+контура доступны и по отдельности, они описаны в [CSharp/README.md](CSharp/README.md) и
+[Python/README.md](Python/README.md).
+
+## Установка в OpenClaw
+
+OpenClaw подключает поставщиков через настройки в `~/.openclaw/openclaw.json`, и FAIRouter встает
+туда как еще один поставщик с одной моделью `auto`. Нужен Python 3.11 и ключ OpenRouter.
+
+Запустите сервер, перечислив модели, между которыми выбирать:
+
+```bash
+pip install -e Python
+OPENROUTER_API_KEY=... python -m fai_router.server \
+    --models google/gemini-2.5-flash,openai/gpt-4.1-mini,anthropic/claude-haiku-4.5 \
+    --db ~/.openclaw/fai-router.db --port 8412
+```
+
+Сервер отвечает по протоколу OpenAI chat completions на `http://127.0.0.1:8412/v1`. Добавьте его
+в `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "fai/auto" },
+    },
+  },
+  models: {
+    providers: {
+      fai: {
+        baseUrl: "http://127.0.0.1:8412/v1",
+        apiKey: "not-needed",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        models: [{ id: "auto", name: "FAIRouter", contextWindow: 128000, maxTokens: 8192 }],
+      },
+    },
+  },
+}
+```
+
+Затем:
+
+```bash
+openclaw models set fai/auto
+openclaw gateway restart
+```
+
+Каждый запрос OpenClaw пройдет через роутер: задание распознается по последнему сообщению
+пользователя, исполнителю уходит весь диалог, ответ возвращается в формате OpenAI, а в поле
+`fai_router` ответа лежат номер хода, оценка судьи и признак разведки. Замер ответов судьей стоит
+одного обращения к модели на ход; его отключает `--no-measure`. Отзывы и обучение делаются
+через журнал в указанной базе.
+
 ## Как это работает
 
 Устройство образуют два контура, они же две петли на логотипе. Величина «качество» живет здесь в

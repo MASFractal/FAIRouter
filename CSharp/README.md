@@ -65,6 +65,7 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 
 | Тип | Отвечает за |
 |---|---|
+| `FaiRouter` | фасад: весь контур одним объектом, от запроса до отзыва и обучения |
 | `Env` | ход роутинга целиком: признаки, соревнование, трассировка |
 | `BaseRoutedElement` | кандидат: цены, скорость, обучаемый `IdealMatchVector` |
 | `Specifications` | спецификация, одна и та же для заказа и для факта |
@@ -77,6 +78,24 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 | `SqliteTraceStore`, `SqliteWeightsStore` | журнал ходов и веса в одном файле |
 
 ## Использование
+
+Короткий путь через фасад:
+
+```csharp
+Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = "...", ModelName = "openai/gpt-4o-mini" });
+
+FaiRouter router = new(candidates, (candidate, prompt) => AskModel(candidate.Name, prompt), "fai-router.db");
+RouterAnswer answer = await router.AskAsync(prompt);
+
+router.Feedback(answer.RoundId!.Value, score: 1.0);
+router.Train(epochs: 10);
+router.Save();
+```
+
+Сервер, совместимый с OpenAI, для подключения к OpenClaw есть в Python-версии; для C# он пока не
+написан.
+
+Тот же контур по частям:
 
 ```csharp
 // Клиент модели: общий на процесс либо свой у каждого компонента
