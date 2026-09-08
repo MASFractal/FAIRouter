@@ -82,8 +82,16 @@ def get_top_k(features: InputFeatures, elements: Iterable[RoutedElement], topk: 
     quality = _standardize([element.get_quality_score(vector) for element in fit])
     cost = _standardize([math.log(element.get_cost(features) + COST_FLOOR) for element in fit])
     time = _standardize([math.log(element.get_time(features) + 2) for element in fit])
+
+    # Слагаемые уже стандартизованы, поэтому масштаб суммы задают только веса: деление на
+    # длину вектора весов делает R безразмерной величиной, а не зависящей от того, как именно
+    # заданы WQ, WC и WT. Без этого температура выбора была откалибрована под один конкретный
+    # набор весов и требовала перекалибровки при любом заметном их изменении.
+    weight_norm = math.sqrt(Settings.WQ ** 2 + Settings.WC ** 2 + Settings.WT ** 2)
+    normalizer = weight_norm if weight_norm > 1e-12 else 1.0
+
     scored = [
-        (Settings.WQ * quality[i] - Settings.WC * cost[i] - Settings.WT * time[i], element)
+        ((Settings.WQ * quality[i] - Settings.WC * cost[i] - Settings.WT * time[i]) / normalizer, element)
         for i, element in enumerate(fit)
     ]
     scored.sort(key=lambda item: item[0], reverse=True)

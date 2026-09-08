@@ -73,6 +73,26 @@ def test_greedy_when_temperature_is_zero_and_spread_otherwise():
     assert any(env.choose(task(), members, rng=rng).is_exploration for _ in range(50))
 
 
+def test_r_metric_is_invariant_to_uniform_weight_scaling():
+    """Ради чего нормировали R: масштаб WQ/WC/WT не должен требовать перекалибровки
+    температуры. Пятеро разных кандидатов, веса умножены на 0,1 и на 50, а оценки и порядок
+    обязаны совпасть буквально, поскольку деление на длину вектора весов сокращает общий
+    множитель точно."""
+    rng = np.random.default_rng(3)
+    candidates = [RoutedElement(f"к{i}", tps=float(30 + i * 40), dpmt_inp=0.2 + i * 2,
+                                dpmt_outp=1.0 + i * 8,
+                                ideal_match_vector=RoutedElement.xavier_vector(Settings.full_dim(), rng))
+                  for i in range(5)]
+
+    Settings.WQ, Settings.WC, Settings.WT = 0.05, 0.025, 0.025
+    small = [score for score, _ in env.get_top_k(task(), candidates)]
+
+    Settings.WQ, Settings.WC, Settings.WT = 25.0, 12.5, 12.5
+    large = [score for score, _ in env.get_top_k(task(), candidates)]
+
+    assert np.allclose(small, large)
+
+
 def test_capability_filter_precedes_ranking():
     shared = np.ones(Settings.full_dim())
     text_only = element("только текст", shared, tps=500, dpmt_inp=0.1, dpmt_outp=0.5, capabilities=Capability.NONE)

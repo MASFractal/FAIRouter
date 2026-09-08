@@ -141,8 +141,15 @@ public static class Env
         double[] cost = Standardize([.. fit.Select(element => Math.Log(element.GetCost(features) + CostFloor))]);
         double[] time = Standardize([.. fit.Select(element => Math.Log(element.GetTime(features) + 2))]);
 
+        // Слагаемые уже стандартизованы, поэтому масштаб суммы задают только веса: деление на
+        // длину вектора весов делает R безразмерной величиной, а не зависящей от того, как
+        // именно заданы WQ, WC и Wt. Без этого температура выбора была откалибрована под один
+        // конкретный набор весов и требовала перекалибровки при любом заметном их изменении.
+        double weightNorm = Math.Sqrt(Settings.WQ * Settings.WQ + Settings.WC * Settings.WC + Settings.Wt * Settings.Wt);
+        double normalizer = weightNorm > 1e-12 ? weightNorm : 1.0;
+
         List<(double Score, BaseRoutedElement Element)> rElements = [.. fit.Select((element, i) =>
-            (Settings.WQ * quality[i] - Settings.WC * cost[i] - Settings.Wt * time[i], element))];
+            ((Settings.WQ * quality[i] - Settings.WC * cost[i] - Settings.Wt * time[i]) / normalizer, element))];
 
         rElements.Sort((x, y) => -x.Score.CompareTo(y.Score)); // sort
 
