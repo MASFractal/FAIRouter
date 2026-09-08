@@ -26,6 +26,7 @@ CSharp/
 │   ├── LLM/                 обращения к модели и схемы ответа
 │   ├── RotationTracking/    признаки хода, трассировка, отзыв
 │   ├── Training/            обучение судьи и роутера
+│   ├── Catalog/             цены и возможности моделей у поставщика
 │   ├── Persistence/         веса и журнал ходов в SQLite
 │   ├── Env.cs               среда соревнования кандидатов
 │   └── Settings.cs          веса метрики, размерности, клиент модели
@@ -71,6 +72,8 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 | `DiffSpec` | расхождения по каждому пункту ТЗ |
 | `SpecInputService`, `SpecOutputService` | распознать ТЗ из запроса, измерить готовый ответ |
 | `RouterTrainer`, `JudgeTrainer` | контрастивное обучение и повтор оценки человека |
+| `QualityPrior` | начальные веса кандидата из заранее замеренного качества по типам задач |
+| `ModelCatalog` | цены, окна и возможности моделей из каталога OpenRouter |
 | `SqliteTraceStore`, `SqliteWeightsStore` | журнал ходов и веса в одном файле |
 
 ## Использование
@@ -83,11 +86,17 @@ Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions
     ModelName = "openai/gpt-4o-mini"
 });
 
+// Кандидаты берутся из каталога: руками задается только скорость, ее поставщик не публикует
+IReadOnlyList<ModelInfo> catalog = await ModelCatalog.FetchAsync();
+
 BaseRoutedElement[] candidates =
 [
-    new() { Name = "gemini-2.5-flash", TPS = 200, DPMTInp = 0.30, DPMTOutp = 2.50 },
-    new() { Name = "claude-haiku-4.5", TPS = 60,  DPMTInp = 1.00, DPMTOutp = 5.00 }
+    ModelCatalog.CreateElement(catalog.First(m => m.Id == "google/gemini-2.5-flash"), tokensPerSecond: 200),
+    ModelCatalog.CreateElement(catalog.First(m => m.Id == "anthropic/claude-haiku-4.5"), tokensPerSecond: 60)
 ];
+
+// Задача с картинкой: неспособные отсеются до сравнения оценок
+Tracert visual = await Env.RouteAsync(prompt, candidates, required: Capability.Vision);
 
 // Ход: признаки задачи, соревнование кандидатов, трассировка
 Tracert trace = await Env.RouteAsync(prompt, candidates);

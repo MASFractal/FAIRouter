@@ -162,6 +162,57 @@ public class SqliteTraceStore
     }
 
     /// <summary>
+    /// Заполняет опыт кандидатов из журнала: число оцененных ходов и оценку дисперсии отзывов.
+    /// Возвращает число узнанных кандидатов.
+    /// </summary>
+    /// <remarks>
+    /// Эти две величины нужны формуле температуры выбора, и копить их отдельно не требуется:
+    /// в журнале уже лежит каждый ход с победителем и оценкой отзыва.
+    /// </remarks>
+    /// <param name="elements">Кандидаты</param>
+    public int LoadStatistics(IEnumerable<BaseRoutedElement> elements)
+    {
+        Dictionary<string, BaseRoutedElement> byName = elements
+            .Where(element => !string.IsNullOrWhiteSpace(element.Name))
+            .ToDictionary(element => element.Name!);
+
+        using SqliteConnection connection = SqliteDb.Open(_databasePath);
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT winner, COUNT(*), AVG(feedback_score), AVG(feedback_score * feedback_score)
+            FROM rounds
+            WHERE feedback_score IS NOT NULL
+            GROUP BY winner
+            """;
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        int restored = 0;
+
+        while (reader.Read())
+        {
+            if (!byName.TryGetValue(reader.GetString(0), out BaseRoutedElement? element))
+                continue;
+
+            int count = reader.GetInt32(1);
+            double mean = reader.GetDouble(2);
+            double meanOfSquares = reader.GetDouble(3);
+
+            element.Experience = count;
+
+            // Поправка на несмещенность: по одному ходу дисперсию не оценить, и ноль тут означал бы
+            // уверенность на пустом месте, а не отсутствие разброса
+            element.ScoreVariance = count < 2
+                ? 0
+                : Math.Max(0, (meanOfSquares - mean * mean) * count / (count - 1.0));
+
+            restored++;
+        }
+
+        return restored;
+    }
+
+    /// <summary>
     /// Среднее по векторам задач из журнала, для Settings.TaskMean. Пусто, если ходов еще нет.
     /// </summary>
     /// <remarks>

@@ -170,7 +170,7 @@ public class Specifications
     // Логарифмическая шкала: у объемов и счетчиков значимо отношение величин, а не разница,
     // а деление на масштаб приводит поле к единичному порядку. Отрицательное значение может
     // прийти от модели, распознающей ТЗ, а логарифм на нем дает NaN и портит весь вектор.
-    private static double Scaled(double value, double scale) =>
+    internal static double Scaled(double value, double scale) =>
         Math.Log(1 + Math.Max(0, value)) / Math.Log(1 + scale);
 
     private Vector Style2Vector()
