@@ -460,3 +460,11 @@ appsettings.*.local.json
 # Секреты: ключи API не коммитятся
 key.txt
 *.key
+
+# Python: кеши и сборочные артефакты
+__pycache__/
+.pytest_cache/
+*.egg-info/
+
+# Базы живых прогонов
+*.db
