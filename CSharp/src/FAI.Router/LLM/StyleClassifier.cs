@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AI.LLM.Services.LLM;
 using System.Text.Json.Serialization;
 using AI.LLM.Core.Models.Common.Messages;
 using AI.LLM.Core.Models.Common.Requests;
@@ -8,7 +9,7 @@ namespace FAI.Router.LLM;
 
 /// <summary>
 /// Смысловая оценка текста моделью: стиль и лексические метрики,
-/// то есть всё, что не считается по разметке (через OpenRouter)
+/// то есть все, что не считается по разметке (через OpenRouter)
 /// </summary>
 public class StyleClassifier
 {
@@ -20,12 +21,23 @@ public class StyleClassifier
         "и формальность тона, верни результат строго в виде JSON по заданной схеме, без пояснений.";
 
     private readonly string _schemaJson = BuildSchema();
+    private readonly LLMBase? _llm;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter() }
     };
+
+    /// <summary>
+    /// Смысловая оценка текста моделью
+    /// </summary>
+    /// <param name="llm">
+    /// Клиент модели. Не задан, тогда берется общий Settings.LLM. Свой клиент нужен, когда в одном
+    /// процессе судят несколько моделей: общий клиент один, и подставлять его по очереди значит
+    /// запретить параллельное сравнение.
+    /// </param>
+    public StyleClassifier(LLMBase? llm = null) => _llm = llm;
 
     /// <summary>
     /// Оценивает стиль и лексику текста (один запрос к LLM)
@@ -48,12 +60,12 @@ public class StyleClassifier
             new LLMMessage(LLMMessage.UserRole, text)
         ];
 
-        string response = await Settings.LLM.SendToLLM(messages, settings, cancellationToken).ConfigureAwait(false);
+        string response = await (_llm ?? Settings.LLM).SendToLLM(messages, settings, cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Deserialize<StyleAssessment>(response, JsonOptions) ?? new StyleAssessment();
     }
 
     // Схема ответа: имена полей совпадают со свойствами Specifications,
-    // список стилей берётся из Style, чтобы не расходиться с перечислением
+    // список стилей берется из Style, чтобы не расходиться с перечислением
     private static string BuildSchema()
     {
         var schema = new
@@ -90,7 +102,7 @@ public class StyleClassifier
 }
 
 /// <summary>
-/// Смысловые признаки текста, которые распознаёт модель
+/// Смысловые признаки текста, которые распознает модель
 /// </summary>
 /// <param name="StyleType">Стиль текста</param>
 /// <param name="TermDensity">Доля терминологии, 0-1</param>

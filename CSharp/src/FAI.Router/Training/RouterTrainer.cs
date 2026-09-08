@@ -10,13 +10,13 @@ namespace FAI.Router.Training;
 /// <summary>
 /// Контрастивное обучение роутера: вектор соответствия победителя и его соперников
 /// разводится так, чтобы на похожих задачах впереди оказывался тот, чей ответ понравился.
-/// Учится не абсолютная оценка, а порядок — какой кандидат уместнее именно здесь.
+/// Учится не абсолютная оценка, а порядок, то есть какой кандидат уместнее именно здесь.
 /// </summary>
 public class RouterTrainer
 {
     /// <summary>
     /// Требуемый отрыв победителя от соперника: без зазора обучение останавливается,
-    /// едва порядок стал верным, и разделение остаётся сколь угодно шатким
+    /// едва порядок стал верным, и разделение остается сколь угодно шатким
     /// </summary>
     private const float Margin = 0.1f;
 
@@ -47,7 +47,9 @@ public class RouterTrainer
         if (rivals.Length == 0)
             return 0;
 
-        Tensor task = TensorBridge.ToColumn(trace.InputFeatureVector);
+        // Тот же вид признаков, что и при подсчете прогноза: иначе вектор учился бы в одном
+        // пространстве, а работал в другом
+        Tensor task = TensorBridge.ToColumn(Settings.Center(trace.InputFeatureVector));
         bool liked = feedback.FeadbackScore >= LikeThreshold;
 
         (BaseRoutedElement Element, Parameter Vector)[] trained =
@@ -58,7 +60,13 @@ public class RouterTrainer
         Optimizer optimizer = new SGD([.. trained.Select(item => item.Vector)], lr: _learningRate);
         optimizer.ZeroGrad();
 
-        Tensor loss = GetLoss(trained[0].Vector, trained[1..], task, liked);
+        // Сила отзыва, а не только его знак. Оценка ровно на пороге не несет сведений, края несут
+        // максимум. Без этого множителя посредственный, но одобренный ответ двигал бы веса так же,
+        // как отличный, и разведка теряла бы смысл: соперник отвечает лучше, а обучение не видит
+        // разницы между «сойдет» и «отлично».
+        float weight = (float)(Math.Abs(feedback.FeadbackScore - LikeThreshold) / LikeThreshold);
+
+        Tensor loss = TensorOps.MulScalar(GetLoss(trained[0].Vector, trained[1..], task, liked), weight);
         loss.Backward();
         optimizer.Step();
 
@@ -83,7 +91,7 @@ public class RouterTrainer
         {
             Tensor rivalScore = GetScore(vector, task);
 
-            // Понравилось — победитель должен быть выше соперника, не понравилось — ниже
+            // Если понравилось, победитель должен быть выше соперника, если нет, то ниже
             Tensor gap = liked
                 ? TensorOps.Sub(winnerScore, rivalScore)
                 : TensorOps.Sub(rivalScore, winnerScore);

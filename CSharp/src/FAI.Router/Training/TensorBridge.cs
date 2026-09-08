@@ -8,19 +8,19 @@ namespace FAI.Router.Training;
 
 /// <summary>
 /// Перевод между алгеброй роутера (Vector, Matrix) и тензорами автограда.
-/// Тензоры считают только во float32, поэтому точность на границе теряется — для обучения
-/// весов это несущественно, но обратная запись всегда идёт через этот же мост, чтобы
+/// Тензоры считают только во float32, поэтому точность на границе теряется, но для обучения
+/// весов это несущественно, но обратная запись всегда идет через этот же мост, чтобы
 /// расхождение не накапливалось незаметно.
 /// </summary>
 internal static class TensorBridge
 {
     /// <summary>
-    /// Вектор как строка (1, n) — в таком виде его берут MatMul и CosineSimilarity
+    /// Вектор как строка (1, n): в таком виде его берут MatMul и CosineSimilarity
     /// </summary>
     public static Tensor ToRow(Vector vector) => Tensor.From(ToFloats(vector), new Shape(1, vector.Count));
 
     /// <summary>
-    /// Вектор как колонка (n, 1) — правый множитель матрицы
+    /// Вектор как колонка (n, 1), правый множитель матрицы
     /// </summary>
     public static Tensor ToColumn(Vector vector) => Tensor.From(ToFloats(vector), new Shape(vector.Count, 1));
 

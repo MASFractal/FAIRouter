@@ -15,9 +15,9 @@ public class BaseRoutedElement
     public string? Name { get; set; }
 
     /// <summary>
-    /// Вектор для сравнения 
+    /// Вектор для сравнения (обучаемый), инициализация по Ксавье
     /// </summary>
-    public Vector IdealMatchVector { get; set; } = new Vector(Settings.FeaturesDim + Settings.FeaturesSpecDim) + 1.0/Settings.FeaturesDim; // Простое среднее признаков
+    public Vector IdealMatchVector { get; set; } = XavierVector(Settings.FeaturesDim + Settings.FeaturesSpecDim);
 
     /// <summary>
     /// Число токенов в секунду
@@ -40,7 +40,7 @@ public class BaseRoutedElement
     /// </summary>
     /// <param name="features">Признаки запроса</param>
     public virtual double GetQualityScore(Vector features) =>
-        features.Dot(IdealMatchVector);
+        Settings.Center(features).Dot(IdealMatchVector);
 
     /// <summary>
     /// Оценка по метрике R
@@ -54,5 +54,22 @@ public class BaseRoutedElement
         double nom = Settings.WQ * q - Settings.WC * c;
         double denom = Settings.Wt * Math.Log(t + 2);
         return nom / denom;
+    }
+
+    /// <summary>
+    /// Инициализация обучаемого вектора по Ксавье: равномерно из [-limit, limit],
+    /// limit = sqrt(6 / n). Разброс задан размерностью, поэтому прогноз качества на старте
+    /// не зависит от того, сколько признаков в векторе.
+    /// </summary>
+    /// <param name="dimension">Размерность вектора признаков</param>
+    public static Vector XavierVector(int dimension)
+    {
+        double limit = Math.Sqrt(6.0 / dimension);
+        Vector vector = new(dimension);
+
+        for (int i = 0; i < dimension; i++)
+            vector[i] = (Random.Shared.NextDouble() * 2 - 1) * limit;
+
+        return vector;
     }
 }

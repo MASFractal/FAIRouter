@@ -30,9 +30,10 @@ public class SpecInputService : ISpecService
     /// <summary>
     /// Получение спецификации на входе (через LLM)
     /// </summary>
-    public SpecInputService()
+    /// <param name="llm">Клиент модели; не задан, тогда берется общий Settings.LLM</param>
+    public SpecInputService(LLMBase? llm = null)
     {
-        _specRecog = new LLMRecognitionSpecInput();
+        _specRecog = new LLMRecognitionSpecInput(llm);
     }
 
     /// <summary>
@@ -48,11 +49,17 @@ public class SpecInputService : ISpecService
 }
 
 /// <summary>
-/// Получение спецификации на выходе: структура считается по тексту, стиль распознаётся моделью
+/// Получение спецификации на выходе: структура считается по тексту, стиль распознается моделью
 /// </summary>
 public class SpecOutputService : ISpecService
 {
-    private readonly StyleClassifier _styleClassifier = new();
+    private readonly StyleClassifier _styleClassifier;
+
+    /// <summary>
+    /// Замер фактической спецификации ответа
+    /// </summary>
+    /// <param name="llm">Клиент модели; не задан, тогда берется общий Settings.LLM</param>
+    public SpecOutputService(LLMBase? llm = null) => _styleClassifier = new StyleClassifier(llm);
 
     /// <summary>
     /// Измеряет фактическую спецификацию готового ответа

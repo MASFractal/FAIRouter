@@ -5,7 +5,7 @@ using FAI.Router.RotationTracking;
 using FAI.Router.RoutedElements;
 using FAI.Router.Services;
 
-// Ключ берётся из key.txt рядом с проектом (в git не попадает) или из переменной окружения
+// Ключ берется из key.txt рядом с проектом (в git не попадает) или из переменной окружения
 string keyFile = Path.Combine(AppContext.BaseDirectory, "key.txt");
 string apiKey = File.Exists(keyFile)
     ? File.ReadAllText(keyFile).Trim()

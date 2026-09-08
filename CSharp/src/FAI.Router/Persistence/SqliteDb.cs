@@ -9,7 +9,7 @@ namespace FAI.Router.Persistence;
 internal static class SqliteDb
 {
     /// <summary>
-    /// Открытое соединение с базой; файл создаётся при отсутствии
+    /// Открытое соединение с базой; файл создается при отсутствии
     /// </summary>
     /// <param name="databasePath">Путь к файлу базы</param>
     public static SqliteConnection Open(string databasePath)

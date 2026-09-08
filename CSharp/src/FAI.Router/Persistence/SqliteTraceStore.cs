@@ -14,7 +14,7 @@ namespace FAI.Router.Persistence;
 /// <param name="Id">Идентификатор хода в базе</param>
 /// <param name="Trace">Трассировка: победитель, соперники, признаки задачи</param>
 /// <param name="Feedback">Отзыв на ответ победителя</param>
-/// <param name="Requested">Заказанная спецификация; null, если ход записан без неё</param>
+/// <param name="Requested">Заказанная спецификация; null, если ход записан без нее</param>
 /// <param name="Actual">Фактическая спецификация ответа; null, если ответ не замерялся</param>
 public record TrainingRound(
     long Id,
@@ -25,7 +25,7 @@ public record TrainingRound(
 
 /// <summary>
 /// Накопитель ходов и отзывов в той же базе, что и веса. Тренеры делают шаг по одному примеру,
-/// а закономерность видна только на выборке — накопитель и есть то, из чего она берётся.
+/// а закономерность видна только на выборке, а накопитель и есть то, из чего она берется.
 /// Отзыв приходит позже самого хода, поэтому пишется отдельным действием.
 /// </summary>
 public class SqliteTraceStore
@@ -35,7 +35,7 @@ public class SqliteTraceStore
     /// <summary>
     /// Накопитель ходов и отзывов
     /// </summary>
-    /// <param name="databasePath">Путь к файлу базы, создаётся при отсутствии</param>
+    /// <param name="databasePath">Путь к файлу базы, создается при отсутствии</param>
     public SqliteTraceStore(string databasePath)
     {
         _databasePath = databasePath;
@@ -62,8 +62,8 @@ public class SqliteTraceStore
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO rounds (created_at, prompt, winner, rivals_json, features_json, score, requested_json, actual_json)
-            VALUES ($createdAt, $prompt, $winner, $rivals, $features, $score, $requested, $actual);
+            INSERT INTO rounds (created_at, prompt, winner, rivals_json, features_json, score, is_exploration, requested_json, actual_json)
+            VALUES ($createdAt, $prompt, $winner, $rivals, $features, $score, $exploration, $requested, $actual);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("$createdAt", DateTime.UtcNow.ToString("O"));
@@ -72,6 +72,7 @@ public class SqliteTraceStore
         command.Parameters.AddWithValue("$rivals", JsonSerializer.Serialize(rivals));
         command.Parameters.AddWithValue("$features", SerializeVector(trace.InputFeatureVector));
         command.Parameters.AddWithValue("$score", trace.Score);
+        command.Parameters.AddWithValue("$exploration", trace.IsExploration ? 1 : 0);
         command.Parameters.AddWithValue("$requested", (object?)Serialize(requested) ?? DBNull.Value);
         command.Parameters.AddWithValue("$actual", (object?)Serialize(actual) ?? DBNull.Value);
 
@@ -98,7 +99,7 @@ public class SqliteTraceStore
 
     /// <summary>
     /// Обучающая выборка: ходы, у которых есть отзыв, свежие первыми.
-    /// Ход пропускается, если кто-то из его участников больше не значится в каталоге —
+    /// Ход пропускается, если кто-то из его участников больше не значится в каталоге:
     /// снятую модель незачем ни поощрять, ни наказывать.
     /// </summary>
     /// <param name="catalog">Действующие кандидаты, по именам которых восстанавливается трассировка</param>
@@ -113,7 +114,7 @@ public class SqliteTraceStore
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, winner, rivals_json, features_json, score, requested_json, actual_json, feedback_type, feedback_score
+            SELECT id, winner, rivals_json, features_json, score, requested_json, actual_json, feedback_type, feedback_score, is_exploration
             FROM rounds
             WHERE feedback_score IS NOT NULL
             ORDER BY id DESC
@@ -139,7 +140,8 @@ public class SqliteTraceStore
                 Winner = winner,
                 TopKElements = [winner, .. rivalNames.Select(name => byName[name])],
                 InputFeatureVector = new Vector(JsonSerializer.Deserialize<double[]>(reader.GetString(3)) ?? []),
-                Score = reader.GetDouble(4)
+                Score = reader.GetDouble(4),
+                IsExploration = reader.GetInt32(9) != 0
             };
 
             Feedback feedback = new()
@@ -157,6 +159,34 @@ public class SqliteTraceStore
         }
 
         return rounds;
+    }
+
+    /// <summary>
+    /// Среднее по векторам задач из журнала, для Settings.TaskMean. Пусто, если ходов еще нет.
+    /// </summary>
+    /// <remarks>
+    /// Ходы хранятся несмещенными именно ради этого расчета: если бы в журнал попадали уже
+    /// смещенные векторы, среднее считалось бы само из себя и с каждым пересчетом уползало.
+    /// </remarks>
+    public Vector? GetFeatureMean()
+    {
+        using SqliteConnection connection = SqliteDb.Open(_databasePath);
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT features_json FROM rounds";
+
+        using SqliteDataReader reader = command.ExecuteReader();
+
+        Vector? sum = null;
+        int count = 0;
+
+        while (reader.Read())
+        {
+            Vector features = new(JsonSerializer.Deserialize<double[]>(reader.GetString(0)) ?? []);
+            sum = sum is null ? features : sum + features;
+            count++;
+        }
+
+        return count == 0 ? null : sum! / count;
     }
 
     /// <summary>
@@ -204,6 +234,7 @@ public class SqliteTraceStore
                 rivals_json    TEXT    NOT NULL,
                 features_json  TEXT    NOT NULL,
                 score          REAL    NOT NULL DEFAULT 0,
+                is_exploration INTEGER NOT NULL DEFAULT 0,
                 requested_json TEXT,
                 actual_json    TEXT,
                 feedback_type  INTEGER,

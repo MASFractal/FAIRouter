@@ -5,7 +5,7 @@ using FAI.Router.JudgeLogic;
 namespace FAI.Router.Services;
 
 /// <summary>
-/// Измерение спецификации текста по факту: всё, что считается без обращения к LLM
+/// Измерение спецификации текста по факту: все, что считается без обращения к LLM
 /// </summary>
 public static class TextMetrics
 {
@@ -27,7 +27,7 @@ public static class TextMetrics
 
     /// <summary>
     /// Измеряет спецификацию готового текста.
-    /// StyleType, TermDensity и FormalityScore остаются по умолчанию —
+    /// StyleType, TermDensity и FormalityScore остаются по умолчанию, так как
     /// они смысловые и измеряются моделью.
     /// </summary>
     /// <param name="text">Текст ответа</param>
@@ -59,8 +59,8 @@ public static class TextMetrics
     private static int CountParagraphs(string text) =>
         ParagraphBreak.Split(text).Count(IsProse);
 
-    // Абзац — сплошной текст: заголовок, список, таблица и код абзацами не считаются,
-    // иначе замер разойдётся с заказом, где под абзацами понимают прозу
+    // Абзацем считается сплошной текст: заголовок, список, таблица и код абзацами не считаются,
+    // иначе замер разойдется с заказом, где под абзацами понимают прозу
     private static bool IsProse(string block)
     {
         string? firstLine = block.Split('\n').FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));

@@ -15,7 +15,7 @@ public class InputFeaturesService
     private static readonly SpecInputService SpecService = new();
 
     /// <summary>
-    /// Полные признаки запроса: объём оценивается арифметикой, ТЗ распознаёт модель
+    /// Полные признаки запроса: объем оценивается арифметикой, ТЗ распознает модель
     /// </summary>
     /// <param name="text">Текст запроса</param>
     public static async Task<InputFeatures> GetFeaturesAsync(string text)
@@ -27,7 +27,7 @@ public class InputFeaturesService
     }
 
     /// <summary>
-    /// Отдает признаки объёма текста (промпта) без обращения к модели
+    /// Отдает признаки объема текста (промпта) без обращения к модели
     /// </summary>
     /// <param name="text">Текст</param>
     public static InputFeatures GetFeatures(string text) 

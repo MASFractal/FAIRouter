@@ -23,8 +23,8 @@ public class LLMRecognitionSpecInput
     private const string PromptTmpl = """
         Извлеки техническое задание из запроса пользователя к языковой модели.
         Опиши, каким должен быть ОТВЕТ на этот запрос, и верни параметры ответа в JSON по схеме.
-        Явно заданные требования (объём, стиль, число разделов, таблицы, язык) бери как есть.
-        Неуказанное оценивай разумным ожиданием для такой задачи, а не нулём.
+        Явно заданные требования (объем, стиль, число разделов, таблицы, язык) бери как есть.
+        Неуказанное оценивай разумным ожиданием для такой задачи, а не нулем.
 
         Запрос пользователя:
         ----
@@ -33,6 +33,7 @@ public class LLMRecognitionSpecInput
         """;
 
     private readonly GenerateSettings _settings;
+    private readonly LLMBase? _llm;
 
     private static readonly string SchemaJson = BuildSchema();
 
@@ -45,8 +46,10 @@ public class LLMRecognitionSpecInput
     /// <summary>
     /// Получение спецификации на входе (через LLM)
     /// </summary>
-    public LLMRecognitionSpecInput()
+    /// <param name="llm">Клиент модели; не задан, тогда берется общий Settings.LLM</param>
+    public LLMRecognitionSpecInput(LLMBase? llm = null)
     {
+        _llm = llm;
         _settings = new(temperature: 0)
         {
             ResponseFormat = ResponseFormat.CreateJsonSchema("input_specifications", SchemaJson)
@@ -65,15 +68,15 @@ public class LLMRecognitionSpecInput
         string promptForModel = PromptTmpl.Replace("{text}", prompt);
 
         // Сообщение собирается явно: перегрузка SendToLLM(string) подставляет системным сообщением
-        // промпт КЛИЕНТА, а он у общего Settings.LLM не задан — провайдер отвергает content = null
+        // промпт КЛИЕНТА, а он у общего Settings.LLM не задан, поэтому поставщик отвергает content = null
         List<LLMMessage> messages = [new LLMMessage(LLMMessage.UserRole, promptForModel)];
 
-        string json = await Settings.LLM.SendToLLM(messages, _settings).ConfigureAwait(false);
+        string json = await (_llm ?? Settings.LLM).SendToLLM(messages, _settings).ConfigureAwait(false);
         return JsonSerializer.Deserialize<Specifications>(json, JsonOptions) ?? new Specifications();
     }
 
     // Схема ответа: имена полей совпадают со свойствами Specifications,
-    // список стилей берётся из Style, чтобы не расходиться с перечислением
+    // список стилей берется из Style, чтобы не расходиться с перечислением
     private static string BuildSchema()
     {
         string styles = string.Join(", ", Enum.GetNames<Style>().Select(name => $"\"{name}\""));
@@ -83,8 +86,8 @@ public class LLMRecognitionSpecInput
               "type": "object",
               "properties": {
                 "styleType": { "type": "string", "enum": [{{styles}}], "description": "Стиль текста ответа" },
-                "symbolLength": { "type": "integer", "description": "Объём ответа в символах" },
-                "wordLength": { "type": "integer", "description": "Объём ответа в словах" },
+                "symbolLength": { "type": "integer", "description": "Объем ответа в символах" },
+                "wordLength": { "type": "integer", "description": "Объем ответа в словах" },
                 "paragraphCount": { "type": "integer", "description": "Число абзацев" },
                 "sectionCount": { "type": "integer", "description": "Число разделов" },
                 "listItemCount": { "type": "integer", "description": "Число пунктов списков" },

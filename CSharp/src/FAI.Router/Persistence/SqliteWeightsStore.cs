@@ -9,7 +9,7 @@ namespace FAI.Router.Persistence;
 
 /// <summary>
 /// Хранилище обученных весов в SQLite: векторы соответствия кандидатов и матрица судьи.
-/// Кандидат опознаётся по имени — переименование равносильно потере обучения.
+/// Кандидат опознается по имени, поэтому переименование равносильно потере обучения.
 /// </summary>
 public class SqliteWeightsStore
 {
@@ -18,7 +18,7 @@ public class SqliteWeightsStore
     /// <summary>
     /// Хранилище обученных весов в SQLite
     /// </summary>
-    /// <param name="databasePath">Путь к файлу базы, создаётся при отсутствии</param>
+    /// <param name="databasePath">Путь к файлу базы, создается при отсутствии</param>
     public SqliteWeightsStore(string databasePath)
     {
         _databasePath = databasePath;
@@ -115,7 +115,7 @@ public class SqliteWeightsStore
     }
 
     /// <summary>
-    /// Восстанавливает матрицу судьи. Ложь — обученной матрицы в базе ещё нет.
+    /// Восстанавливает матрицу судьи. Ложь означает, что обученной матрицы в базе еще нет.
     /// </summary>
     /// <param name="judge">Судья</param>
     public bool Load(Judge judge)
@@ -147,6 +147,39 @@ public class SqliteWeightsStore
         return true;
     }
 
+    /// <summary>
+    /// Сохраняет среднее по векторам задач вместе с весами
+    /// </summary>
+    /// <param name="taskMean">Среднее из Settings.TaskMean</param>
+    public void SaveTaskMean(Vector taskMean)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO task_mean (id, values_json) VALUES (1, $values)
+            ON CONFLICT(id) DO UPDATE SET values_json = excluded.values_json
+            """;
+        command.Parameters.AddWithValue("$values", Serialize(taskMean));
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Восстанавливает среднее по векторам задач. Пусто, если его еще не сохраняли.
+    /// </summary>
+    /// <remarks>
+    /// Загружать среднее нужно вместе с весами и до первого хода: веса обучены в пространстве с
+    /// этим средним, и без него прогноз качества считается по другим признакам.
+    /// </remarks>
+    public Vector? LoadTaskMean()
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT values_json FROM task_mean WHERE id = 1";
+
+        return command.ExecuteScalar() is string json ? new Vector(Deserialize(json)) : null;
+    }
+
     // Размерность признаков меняется при добавлении стиля или метрики: молча взятые
     // веса прежней длины означали бы обучение поверх мусора
     private static void Expect(int stored, int expected, string what)
@@ -154,7 +187,7 @@ public class SqliteWeightsStore
         if (stored != expected)
             throw new InvalidOperationException(
                 $"В базе {what} размерности {stored}, а сейчас ожидается {expected}. " +
-                "Признаки изменились — сохранённые веса больше не применимы.");
+                "Признаки изменились, сохраненные веса больше не применимы.");
     }
 
     private static string Serialize(Vector vector)
@@ -181,6 +214,11 @@ public class SqliteWeightsStore
             CREATE TABLE IF NOT EXISTS element_vectors (
                 name        TEXT    PRIMARY KEY,
                 dimension   INTEGER NOT NULL,
+                values_json TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS task_mean (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
                 values_json TEXT    NOT NULL
             );
 

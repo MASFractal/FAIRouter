@@ -8,7 +8,7 @@ namespace FAI.Router.Training;
 
 /// <summary>
 /// Обучение судьи: матрица трансформации подгоняется так, чтобы оценка судьи повторяла
-/// оценку человека. Ошибка — квадрат расхождения, спуск по градиенту.
+/// оценку человека. Ошибкой служит квадрат расхождения, а обучение идет спуском по градиенту.
 /// </summary>
 public class JudgeTrainer
 {
@@ -29,11 +29,11 @@ public class JudgeTrainer
     }
 
     /// <summary>
-    /// Один шаг обучения. Возвращает ошибку до шага — по её убыванию видно, что судья учится.
+    /// Один шаг обучения. Возвращает ошибку до шага, по ее убыванию видно, что судья учится.
     /// </summary>
     /// <param name="requested">Заказанная спецификация (ТЗ)</param>
     /// <param name="actual">Фактическая спецификация ответа</param>
-    /// <param name="humanScore">Оценка человека: 1 — нравится, 0 — нет</param>
+    /// <param name="humanScore">Оценка человека: единица означает «нравится», ноль означает «нет»</param>
     public double Train(Specifications requested, Specifications actual, double humanScore)
     {
         int dim = Settings.FeaturesSpecDim;
