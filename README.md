@@ -14,6 +14,8 @@
 [![License](https://img.shields.io/github/license/MASFractal/FAIRouter?style=flat-square&color=1E90FF)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-1E90FF?style=flat-square&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 
+<img src="docs/logo/demo.gif" alt="FAIRouter: выбор исполнителя и приемка ответа судьей" width="640">
+
 </div>
 
 ---
