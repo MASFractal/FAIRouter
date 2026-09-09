@@ -16,6 +16,9 @@
 
 <img src="docs/logo/demo.gif" alt="FAIRouter: выбор исполнителя и приемка ответа судьей" width="640">
 
+[![Смотреть на YouTube](https://img.shields.io/badge/YouTube-смотреть-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://youtu.be/FMesl7rxbYo)
+[![Смотреть в VK Video](https://img.shields.io/badge/VK%20Video-смотреть-0077FF?style=flat-square&logo=vk&logoColor=white)](https://vkvideo.ru/video-233381656_456239019)
+
 </div>
 
 ---
