@@ -7,6 +7,21 @@ using FAI.Router.Enums;
 
 namespace FAI.Router;
 
+/// <summary>
+/// Веса метрики R и множитель температуры, действующие на один выбор.
+/// </summary>
+/// <remarks>
+/// Отдельный тип нужен потому, что веса задает заказчик выбора, а не процесс. Хост может вести
+/// несколько выборов одновременно и с разными предпочтениями: одному важна цена, другому
+/// качество. Пока значения жили только в статических свойствах <see cref="Settings"/>, соседний
+/// выбор менял условия уже начатому, и промах нечем было воспроизвести.
+/// </remarks>
+/// <param name="WQ">Доля важности качества</param>
+/// <param name="WC">Доля важности цены</param>
+/// <param name="Wt">Доля важности времени</param>
+/// <param name="TemperatureScale">Множитель температуры выбора; ноль делает выбор жадным</param>
+public readonly record struct RouteWeights(double WQ, double WC, double Wt, double TemperatureScale);
+
 public class Settings
 {
     /// <summary>
@@ -45,6 +60,11 @@ public class Settings
     /// </para>
     /// </remarks>
     public static double TemperatureScale { get; set; } = 30.0;
+
+    /// <summary>
+    /// Нынешние веса одним значением: их получает выбор, который своих не назвал.
+    /// </summary>
+    public static RouteWeights Current => new(WQ, WC, Wt, TemperatureScale);
 
     /// <summary>
     /// Дисперсия, приписываемая кандидату, о котором еще нечего знать. Взято наибольшее

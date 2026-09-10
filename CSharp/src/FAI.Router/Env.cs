@@ -18,7 +18,9 @@ public static class Env
     /// <param name="textPrompt">Текст запроса</param>
     /// <param name="elements">Кандидаты на исполнение</param>
     /// <param name="topk">Сколько лучших оставить</param>
-    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None)
+    /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
     {
         BaseRoutedElement[] candidates = [.. elements];
 
@@ -30,7 +32,7 @@ public static class Env
 
         InputFeatures features = await InputFeaturesService.GetFeaturesAsync(textPrompt).ConfigureAwait(false);
 
-        return Choose(features, candidates, topk, required);
+        return Choose(features, candidates, topk, required, weights);
     }
 
     /// <summary>
@@ -42,16 +44,18 @@ public static class Env
     /// <param name="features">Признаки запроса</param>
     /// <param name="elements">Кандидаты на исполнение</param>
     /// <param name="topk">Сколько лучших оставить</param>
-    public static Tracert Choose(InputFeatures features, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None)
+    /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static Tracert Choose(InputFeatures features, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
     {
-        List<(double Score, BaseRoutedElement Element)> best = GetTopK(features, elements, topk, required);
+        List<(double Score, BaseRoutedElement Element)> best = GetTopK(features, elements, topk, required, weights);
 
         if (best.Count == 0)
             throw new ArgumentException(
                 "Ни один кандидат не подходит: список пуст либо все отсеяны по возможностям.",
                 nameof(elements));
 
-        int chosen = Sample(best);
+        int chosen = Sample(best, weights);
 
         return new Tracert
         {
@@ -69,7 +73,8 @@ public static class Env
     /// пробовать соперников вместо того, чтобы держаться за лидера.
     /// </summary>
     /// <param name="group">Кандидаты, отобранные в топ-K</param>
-    public static double Temperature(IEnumerable<BaseRoutedElement> group)
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static double Temperature(IEnumerable<BaseRoutedElement> group, RouteWeights? weights = null)
     {
         double sum = 0;
         int count = 0;
@@ -85,13 +90,13 @@ public static class Env
             count++;
         }
 
-        return count == 0 ? 0 : Settings.TemperatureScale * sum / count;
+        return count == 0 ? 0 : (weights ?? Settings.Current).TemperatureScale * sum / count;
     }
 
     // Выбор кандидата сэмплированием из softmax по оценкам топ-K
-    private static int Sample(List<(double Score, BaseRoutedElement Element)> best)
+    private static int Sample(List<(double Score, BaseRoutedElement Element)> best, RouteWeights? weights)
     {
-        double temperature = Temperature(best.Select(item => item.Element));
+        double temperature = Temperature(best.Select(item => item.Element), weights);
 
         // Температура ушла в ноль: группа изучена и разброса в отзывах нет, брать лучшего
         if (temperature < 1e-9)
@@ -100,13 +105,13 @@ public static class Env
         // Оценки сдвигаются на лучшую из них: при малой температуре показатель степени
         // иначе улетает в бесконечность, и распределение обращается в NaN
         double top = best[0].Score;
-        double[] weights = [.. best.Select(item => Math.Exp((item.Score - top) / temperature))];
-        double total = weights.Sum();
+        double[] chances = [.. best.Select(item => Math.Exp((item.Score - top) / temperature))];
+        double total = chances.Sum();
         double dice = Random.Shared.NextDouble() * total;
 
-        for (int i = 0; i < weights.Length; i++)
+        for (int i = 0; i < chances.Length; i++)
         {
-            dice -= weights[i];
+            dice -= chances[i];
 
             if (dice <= 0)
                 return i;
@@ -121,8 +126,12 @@ public static class Env
     /// <param name="features">Признаки запроса</param>
     /// <param name="elements">Кандидаты на исполнение</param>
     /// <param name="topk">Сколько лучших оставить</param>
-    public static List<(double Score, BaseRoutedElement Element)> GetTopK(InputFeatures features, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None)
+    /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static List<(double Score, BaseRoutedElement Element)> GetTopK(InputFeatures features, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
     {
+        RouteWeights w = weights ?? Settings.Current;
+
         // Отсев по возможностям идет до сравнения оценок. Иначе кандидат, который заведомо не
         // справится, выигрывает по цене и скорости: метрика R о возможностях ничего не знает.
         BaseRoutedElement[] fit = [.. elements.Where(element => element.Supports(features.InputSpecifications, required))];
@@ -145,11 +154,11 @@ public static class Env
         // длину вектора весов делает R безразмерной величиной, а не зависящей от того, как
         // именно заданы WQ, WC и Wt. Без этого температура выбора была откалибрована под один
         // конкретный набор весов и требовала перекалибровки при любом заметном их изменении.
-        double weightNorm = Math.Sqrt(Settings.WQ * Settings.WQ + Settings.WC * Settings.WC + Settings.Wt * Settings.Wt);
+        double weightNorm = Math.Sqrt(w.WQ * w.WQ + w.WC * w.WC + w.Wt * w.Wt);
         double normalizer = weightNorm > 1e-12 ? weightNorm : 1.0;
 
         List<(double Score, BaseRoutedElement Element)> rElements = [.. fit.Select((element, i) =>
-            ((Settings.WQ * quality[i] - Settings.WC * cost[i] - Settings.Wt * time[i]) / normalizer, element))];
+            ((w.WQ * quality[i] - w.WC * cost[i] - w.Wt * time[i]) / normalizer, element))];
 
         rElements.Sort((x, y) => -x.Score.CompareTo(y.Score)); // sort
 
