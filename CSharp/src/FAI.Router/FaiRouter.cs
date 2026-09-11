@@ -166,7 +166,10 @@ public class FaiRouter
             {
                 loss += _routerTrainer.Train(round.Trace, round.Feedback);
 
-                if (round.Requested is not null && round.Actual is not null)
+                // Судья учится только у человека. Автоотзыв это разбор расхождений по пунктам,
+                // и учить по нему судью значило бы подгонять одну автоматическую оценку под
+                // другую, а человек из этого круга выпадал бы совсем
+                if (round.Feedback.FType == FeedbackType.Human && round.Requested is not null && round.Actual is not null)
                     loss += _judgeTrainer.Train(round.Requested, round.Actual, round.Feedback.FeadbackScore);
             }
         }

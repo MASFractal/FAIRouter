@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from fai_router.enums import FeedbackType
 from fai_router.routed_element import RoutedElement
 from fai_router.settings import Settings
 from fai_router.tracking import Feedback, Tracert
@@ -10,12 +11,22 @@ from fai_router.tracking import Feedback, Tracert
 class RouterTrainer:
     """Контрастивное обучение роутера: векторы победителя и соперников разводятся так, чтобы на
     похожих задачах впереди оказывался тот, чей ответ понравился. Учится порядок, то есть какой
-    кандидат уместнее именно здесь."""
+    кандидат уместнее именно здесь.
+
+    Состояния между шагами тренер не держит: градиент считается от нынешних векторов кандидатов
+    и записывается прямо в них. Кэш векторов переставал бы быть вектором кандидата после первой
+    же загрузки весов или подстановки приора, и обучение писало бы поверх него устаревшее."""
 
     # Требуемый отрыв победителя: без зазора обучение останавливается, едва порядок стал верным
     MARGIN = 0.1
     # Оценка, начиная с которой отзыв считается положительным
     LIKE_THRESHOLD = 0.5
+    # Во сколько раз автоотзыв слабее человеческого. Автоотзыв это разбор расхождений по пунктам,
+    # и половина его пунктов расходится почти всегда: заказ по ним угадан моделью, факт посчитан.
+    # Учить по нему наравне с человеком значило бы давать шуму тот же голос, что и оценке. Совсем
+    # не учить тоже нельзя: до первого человеческого отзыва роутер иначе не учится вовсе.
+    # Величина не измерялась
+    AUTO_FEEDBACK_WEIGHT = 0.25
 
     def __init__(self, learning_rate: float = 0.01):
         self._lr = learning_rate
@@ -33,6 +44,8 @@ class RouterTrainer:
         # Сила отзыва, а не только его знак. Без множителя посредственный, но одобренный ответ
         # двигал бы веса так же, как отличный, и разведка теряла бы смысл
         weight = abs(feedback.score - self.LIKE_THRESHOLD) / self.LIKE_THRESHOLD
+        if feedback.ftype != FeedbackType.HUMAN:
+            weight *= self.AUTO_FEEDBACK_WEIGHT
 
         winner = trace.winner
         gradients: dict[int, np.ndarray] = {}

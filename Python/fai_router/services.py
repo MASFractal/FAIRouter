@@ -29,6 +29,12 @@ class InputFeaturesService:
         """Полные признаки: объем оценивается арифметикой, задание распознает модель."""
         features = cls.get_features(text)
         features.input_specifications = cls._recognizer.get_specifications(text)
+        # Объем ответа берется из распознанного заказа; догадка по длине промпта остается на
+        # случай, когда заказ объема не назвал. Раньше цена и время считались только по промпту:
+        # «напиши обзор на двадцать тысяч знаков» это короткий запрос, и ход выглядел дешевым и
+        # быстрым у всех кандидатов разом
+        if features.input_specifications.symbol_length > 0:
+            features.len_answer = features.input_specifications.symbol_length / cls.EST_SYMBOL_PER_TOKEN
         return features
 
 

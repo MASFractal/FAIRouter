@@ -211,7 +211,9 @@ public static class Env
 
                 return result;
             }
-            catch (Exception exception)
+            // Отмена запасным вариантом не является: отмененный запрос уходил к следующему
+            // кандидату, потом к следующему, и вместо тихого выхода получался AggregateException
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 failures.Add(exception);
             }

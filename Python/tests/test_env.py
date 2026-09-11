@@ -129,3 +129,25 @@ def test_fallback_replaces_winner_with_the_one_who_delivered():
 
     with pytest.raises(RuntimeError):
         env.execute(env.choose(task(), members), lambda _: (_ for _ in ()).throw(RuntimeError("отказ")))
+
+
+def test_weights_are_per_call_not_global():
+    """Ради чего веса стали параметром вызова: два одновременных выбора с разными предпочтениями
+    не должны делить одни статические Settings. Пул один и тот же, различаются только веса:
+    экономному достается дешевый, требовательному сильный."""
+    from fai_router.settings import RouteWeights
+
+    task_features = task()
+    shared = task_features.feature_vector()
+    cheap = element("дешевый", shared * 0.5, tps=300, dpmt_inp=0.1, dpmt_outp=0.5)
+    strong = element("сильный", shared * 2, tps=30, dpmt_inp=15, dpmt_outp=75)
+    thrifty = RouteWeights(WQ=0.05, WC=1.0, WT=0.05, temperature_scale=0)
+    demanding = RouteWeights(WQ=1.0, WC=0.05, WT=0.05, temperature_scale=0)
+
+    assert env.get_top_k(task_features, [cheap, strong], weights=thrifty)[0][1] is cheap
+    assert env.get_top_k(task_features, [cheap, strong], weights=demanding)[0][1] is strong
+    # Без параметра берутся общие из Settings, и результат совпадает буквально
+    assert env.get_top_k(task_features, [cheap, strong]) == \
+        env.get_top_k(task_features, [cheap, strong], weights=Settings.current())
+    # Нулевой множитель делает выбор жадным независимо от Settings.temperature_scale
+    assert env.temperature([cheap, strong], weights=thrifty) == 0

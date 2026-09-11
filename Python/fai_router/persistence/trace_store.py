@@ -106,12 +106,17 @@ class SqliteTraceStore:
 
     def load_statistics(self, elements: Iterable[RoutedElement]) -> int:
         """Опыт кандидатов из журнала: число оцененных ходов и оценка дисперсии отзывов. Эти
-        величины нужны формуле температуры, и копить их отдельно не требуется."""
+        величины нужны формуле температуры, и копить их отдельно не требуется.
+
+        Считаются только человеческие отзывы. Автоотзыв ставится на каждый ход, и по нему опыт
+        рос сам собой: температура падала, разведка гасла, и происходило это по мнению
+        собственного судьи, без единого подтверждения снаружи."""
         by_name = {element.name: element for element in elements if element.name}
         with self._open() as connection:
             rows = connection.execute(
                 "SELECT winner, COUNT(*), AVG(feedback_score), AVG(feedback_score * feedback_score) "
-                "FROM rounds WHERE feedback_score IS NOT NULL GROUP BY winner").fetchall()
+                "FROM rounds WHERE feedback_score IS NOT NULL AND feedback_type = ? GROUP BY winner",
+                (int(FeedbackType.HUMAN),)).fetchall()
         restored = 0
         for name, count, mean, mean_of_squares in rows:
             element = by_name.get(name)

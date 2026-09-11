@@ -68,3 +68,22 @@ def test_trace_journal_accumulates_and_restores(tmp_path):
     assert traces.load_statistics([writer, coder]) == 1
     assert writer.experience == 1 and writer.score_variance == 0.0
     assert np.allclose(traces.get_feature_mean(), features.feature_vector())
+
+
+def test_statistics_count_only_human_feedback(tmp_path):
+    """Опыт и разброс считаются только по человеческим отзывам. Автоотзыв ставится на каждый ход,
+    и по нему опыт рос сам собой: температура падала, разведка гасла по мнению собственного судьи."""
+    traces = SqliteTraceStore(str(tmp_path / "t.db"))
+    writer, coder = RoutedElement("Писатель"), RoutedElement("Кодер")
+    features = InputFeaturesService.get_features("задача")
+    trace = Tracert(winner=writer, top_k_elements=[writer, coder],
+                    input_feature_vector=features.feature_vector())
+
+    for _ in range(3):
+        traces.set_feedback(traces.append(trace), Feedback(FeedbackType.AUTO, 0.8))
+    traces.set_feedback(traces.append(trace), Feedback(FeedbackType.HUMAN, 1.0))
+
+    assert traces.load_statistics([writer, coder]) == 1
+    assert writer.experience == 1
+    # В обучающую выборку автоотзывы при этом входят: роутер по ним учится, просто слабее
+    assert len(traces.read_rated([writer, coder])) == 4

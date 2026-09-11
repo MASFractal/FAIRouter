@@ -23,6 +23,13 @@ public class InputFeaturesService
         InputFeatures features = GetFeatures(text);
         features.InputSpecifications = await SpecService.GetSpecificationsAsync(text).ConfigureAwait(false);
 
+        // Объем ответа берется из распознанного заказа; догадка по длине промпта остается на
+        // случай, когда заказ объема не назвал. Раньше цена и время считались только по промпту:
+        // «напиши обзор на двадцать тысяч знаков» это короткий запрос, и ход выглядел дешевым и
+        // быстрым у всех кандидатов разом
+        if (features.InputSpecifications.SymbolLength > 0)
+            features.LenAnswer = features.InputSpecifications.SymbolLength / EST_SYMBOL_PER_TOKEN;
+
         return features;
     }
 

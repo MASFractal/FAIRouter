@@ -161,7 +161,11 @@ class FaiRouter:
             loss = 0.0
             for training_round in sample:
                 loss += self._router_trainer.train(training_round.trace, training_round.feedback)
-                if training_round.requested is not None and training_round.actual is not None:
+                # Судья учится только у человека. Автоотзыв это разбор расхождений по пунктам, и
+                # учить по нему судью значило бы подгонять одну автоматическую оценку под другую,
+                # а человек из этого круга выпадал бы совсем
+                if (training_round.feedback.ftype == FeedbackType.HUMAN
+                        and training_round.requested is not None and training_round.actual is not None):
                     loss += self._judge_trainer.train(training_round.requested, training_round.actual,
                                                       training_round.feedback.score)
         journal.load_statistics(self.candidates)

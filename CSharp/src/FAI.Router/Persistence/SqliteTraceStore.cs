@@ -168,6 +168,11 @@ public class SqliteTraceStore
     /// <remarks>
     /// Эти две величины нужны формуле температуры выбора, и копить их отдельно не требуется:
     /// в журнале уже лежит каждый ход с победителем и оценкой отзыва.
+    /// <para>
+    /// Считаются только человеческие отзывы. Автоотзыв ставится на каждый ход, и по нему опыт
+    /// рос сам собой: температура падала, разведка гасла, и происходило это по мнению
+    /// собственного судьи, без единого подтверждения снаружи.
+    /// </para>
     /// </remarks>
     /// <param name="elements">Кандидаты</param>
     public int LoadStatistics(IEnumerable<BaseRoutedElement> elements)
@@ -182,9 +187,10 @@ public class SqliteTraceStore
             """
             SELECT winner, COUNT(*), AVG(feedback_score), AVG(feedback_score * feedback_score)
             FROM rounds
-            WHERE feedback_score IS NOT NULL
+            WHERE feedback_score IS NOT NULL AND feedback_type = $human
             GROUP BY winner
             """;
+        command.Parameters.AddWithValue("$human", (int)FeedbackType.Human);
 
         using SqliteDataReader reader = command.ExecuteReader();
         int restored = 0;

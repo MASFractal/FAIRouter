@@ -13,8 +13,7 @@ namespace FAI.Router.Training;
 public class JudgeTrainer
 {
     private readonly Judge _judge;
-    private readonly Parameter _transformer;
-    private readonly Optimizer _optimizer;
+    private readonly float _learningRate;
 
     /// <summary>
     /// Обучение судьи по оценкам человека
@@ -24,8 +23,7 @@ public class JudgeTrainer
     public JudgeTrainer(Judge judge, float learningRate = 0.01f)
     {
         _judge = judge;
-        _transformer = new Parameter(TensorBridge.ToTensor(judge.TransformerW));
-        _optimizer = new SGD([_transformer], lr: learningRate);
+        _learningRate = learningRate;
     }
 
     /// <summary>
@@ -38,22 +36,30 @@ public class JudgeTrainer
     {
         int dim = Settings.FeaturesSpecDim;
 
+        // Тензор строится на шаг от НЫНЕШНЕЙ матрицы судьи, а не копируется один раз в
+        // конструкторе. Копия переставала быть матрицей судьи после первой же загрузки весов:
+        // Load подменяет объект матрицы, и первый шаг обучения перезаписывал загруженное
+        // единичной матрицей с одним шагом. Спуск без импульса состояния между шагами не
+        // держит, поэтому терять здесь нечего.
+        Parameter transformer = new(TensorBridge.ToTensor(_judge.TransformerW));
+        Optimizer optimizer = new SGD([transformer], lr: _learningRate);
+
         Tensor request = TensorBridge.ToColumn(requested.FeaturesSpecificationVector);
         Tensor fact = TensorBridge.ToRow(actual.FeaturesSpecificationVector);
         Tensor target = Tensor.From([(float)humanScore], new Shape(1));
 
-        _optimizer.ZeroGrad();
+        optimizer.ZeroGrad();
 
-        Tensor transformed = _transformer.Tensor.MatMul(request).Reshape(1, dim);
+        Tensor transformed = transformer.Tensor.MatMul(request).Reshape(1, dim);
         Tensor score = EmbeddingLosses.CosineSimilarity(fact, transformed);
         Tensor loss = RegressionLosses.MSE(score, target);
 
         loss.Backward();
-        _optimizer.Step();
+        optimizer.Step();
 
         // Судья считает по Matrix, а не по тензору: без обратной записи обучение
         // никак не отразилось бы на его оценках
-        TensorBridge.WriteBack(_transformer.Tensor, _judge.TransformerW);
+        TensorBridge.WriteBack(transformer.Tensor, _judge.TransformerW);
 
         return TensorBridge.Scalar(loss);
     }

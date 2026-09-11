@@ -2,6 +2,7 @@ using AI.ML.NeuralNetworks.V2;
 using AI.ML.NeuralNetworks.V2.Nn;
 using AI.ML.NeuralNetworks.V2.Optim;
 using AI.ML.NeuralNetworks.V2.Ops;
+using FAI.Router.Enums;
 using FAI.Router.RotationTracking;
 using FAI.Router.RoutedElements;
 
@@ -25,7 +26,17 @@ public class RouterTrainer
     /// </summary>
     private const double LikeThreshold = 0.5;
 
-    private readonly Dictionary<BaseRoutedElement, Parameter> _vectors = [];
+    /// <summary>
+    /// Во сколько раз автоотзыв слабее человеческого.
+    /// </summary>
+    /// <remarks>
+    /// Автоотзыв это разбор расхождений по пунктам, и половина его пунктов расходится почти
+    /// всегда: заказ по ним угадан моделью, факт посчитан. Учить по нему наравне с человеком
+    /// значило бы давать шуму тот же голос, что и оценке. Совсем не учить тоже нельзя: до
+    /// первого человеческого отзыва роутер иначе не учится вовсе. Величина не измерялась.
+    /// </remarks>
+    private const float AutoFeedbackWeight = 0.25f;
+
     private readonly float _learningRate;
 
     /// <summary>
@@ -52,11 +63,14 @@ public class RouterTrainer
         Tensor task = TensorBridge.ToColumn(Settings.Center(trace.InputFeatureVector));
         bool liked = feedback.FeadbackScore >= LikeThreshold;
 
+        // Параметры строятся на шаг от НЫНЕШНИХ векторов кандидатов, без кэша между ходами.
+        // Кэш переставал быть вектором кандидата после первой же загрузки весов или подстановки
+        // приора: объект вектора подменялся, а обучение продолжало писать поверх него устаревшие
+        // значения. Оптимизатор по той же причине на шаг: состав кандидатов меняется от хода к
+        // ходу, а у спуска без импульса нет состояния, которое стоило бы переносить
         (BaseRoutedElement Element, Parameter Vector)[] trained =
-            [.. rivals.Prepend(trace.Winner).Select(element => (element, GetVector(element)))];
+            [.. rivals.Prepend(trace.Winner).Select(element => (element, new Parameter(TensorBridge.ToRow(element.IdealMatchVector))))];
 
-        // Оптимизатор строится на шаг: состав кандидатов меняется от хода к ходу, а у спуска
-        // без импульса нет состояния, которое стоило бы переносить между ходами
         Optimizer optimizer = new SGD([.. trained.Select(item => item.Vector)], lr: _learningRate);
         optimizer.ZeroGrad();
 
@@ -65,6 +79,9 @@ public class RouterTrainer
         // как отличный, и разведка теряла бы смысл: соперник отвечает лучше, а обучение не видит
         // разницы между «сойдет» и «отлично».
         float weight = (float)(Math.Abs(feedback.FeadbackScore - LikeThreshold) / LikeThreshold);
+
+        if (feedback.FType != FeedbackType.Human)
+            weight *= AutoFeedbackWeight;
 
         Tensor loss = TensorOps.MulScalar(GetLoss(trained[0].Vector, trained[1..], task, liked), weight);
         loss.Backward();
@@ -106,16 +123,4 @@ public class RouterTrainer
     // Прогноз качества кандидата: скалярное произведение признаков задачи на его вектор
     private static Tensor GetScore(Parameter vector, Tensor task) =>
         vector.Tensor.MatMul(task).Reshape(1);
-
-    // Вектор кандидата попадает под обучение при первом же его участии в ходе
-    private Parameter GetVector(BaseRoutedElement element)
-    {
-        if (!_vectors.TryGetValue(element, out Parameter? vector))
-        {
-            vector = new Parameter(TensorBridge.ToRow(element.IdealMatchVector));
-            _vectors[element] = vector;
-        }
-
-        return vector;
-    }
 }

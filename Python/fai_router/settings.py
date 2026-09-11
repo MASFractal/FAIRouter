@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from fai_router.enums import Style
+
+
+@dataclass(frozen=True)
+class RouteWeights:
+    """Веса метрики R и множитель температуры, действующие на один выбор.
+
+    Отдельный тип нужен потому, что веса задает заказчик выбора, а не процесс. Хост может вести
+    несколько выборов одновременно и с разными предпочтениями: одному важна цена, другому
+    качество. Пока значения жили только в статических полях Settings, соседний выбор менял
+    условия уже начатому, и промах нечем было воспроизвести."""
+
+    WQ: float
+    WC: float
+    WT: float
+    # Множитель температуры выбора; ноль делает выбор жадным
+    temperature_scale: float
 
 
 class Settings:
@@ -50,6 +68,11 @@ class Settings:
     # paragraph_count, section_count, list_item_count, table_count, code_block_count,
     # formula_count, heading_depth, avg_sentence_length, readability, term_density, formality
     SPEC_NUMERIC_FEATURES: int = 13
+
+    @classmethod
+    def current(cls) -> RouteWeights:
+        """Нынешние веса одним значением: их получает выбор, который своих не назвал."""
+        return RouteWeights(cls.WQ, cls.WC, cls.WT, cls.temperature_scale)
 
     @classmethod
     def features_spec_dim(cls) -> int:

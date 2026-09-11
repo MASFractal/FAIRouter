@@ -112,7 +112,9 @@ def test_three_task_types_separate_with_centering():
             k = dice.randrange(3)
             trace = env.choose(task(kinds[k]), candidates, rng=dice)
             score = 0.95 if trace.winner.name == kinds[k][4] else 0.60
-            trainer.train(trace, Feedback(FeedbackType.AUTO, score))
+            # Оракул знает, кто прав, то есть играет роль человека, а не критика: автоотзыв
+            # входит в обучение с весом 0,25, и та же выборка учила бы вчетверо медленнее
+            trainer.train(trace, Feedback(FeedbackType.HUMAN, score))
             own = scores[trace.winner.name]
             own.append(score)
             trace.winner.experience = len(own)
@@ -121,3 +123,22 @@ def test_three_task_types_separate_with_centering():
 
     results = [run(seed) for seed in range(1, 21)]
     assert sum(r == 3 for r in results) >= 15
+
+
+def test_auto_feedback_moves_weights_weaker_than_human():
+    """Автоотзыв входит в обучение с весом AUTO_FEEDBACK_WEIGHT: шум разбора по пунктам не должен
+    иметь тот же голос, что оценка человека, но и молчать до первого человека роутер не должен."""
+    features = InputFeaturesService.get_features("Напиши научный обзор")
+    features.input_specifications = spec(Style.SCIENTIFIC, 4000, 0.7, 0.9)
+    vector = features.feature_vector()
+
+    def shift(ftype):
+        good = RoutedElement("Подходящая", ideal_match_vector=np.zeros(Settings.full_dim()))
+        bad = RoutedElement("Неподходящая", ideal_match_vector=np.zeros(Settings.full_dim()))
+        trace = Tracert(winner=good, top_k_elements=[good, bad], input_feature_vector=vector)
+        RouterTrainer(learning_rate=0.05).train(trace, Feedback(ftype, 1.0))
+        return float(good.ideal_match_vector @ vector - bad.ideal_match_vector @ vector)
+
+    human, auto = shift(FeedbackType.HUMAN), shift(FeedbackType.AUTO)
+    assert auto > 0
+    assert abs(auto - human * RouterTrainer.AUTO_FEEDBACK_WEIGHT) < 1e-9
