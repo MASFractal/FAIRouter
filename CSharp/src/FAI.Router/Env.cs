@@ -101,8 +101,14 @@ public static class Env
         return count == 0 ? 0 : (weights ?? Settings.Current).TemperatureScale * sum / count;
     }
 
-    // Выбор кандидата сэмплированием из softmax по оценкам топ-K
-    private static int Sample(List<(double Score, BaseRoutedElement Element)> best, RouteWeights? weights)
+    /// <summary>
+    /// Выбор кандидата сэмплированием из softmax по оценкам топ-K: индекс в списке, ноль при
+    /// нулевой температуре. Открыт для вызывающих, которые строят топ-K сами (например, среди
+    /// прошедших планку достаточности) и хотят ту же разведку, что у <see cref="Choose"/>.
+    /// </summary>
+    /// <param name="best">Кандидаты, упорядоченные по метрике R, лучший первым</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static int Sample(List<(double Score, BaseRoutedElement Element)> best, RouteWeights? weights = null)
     {
         double temperature = Temperature(best.Select(item => item.Element), weights);
 
