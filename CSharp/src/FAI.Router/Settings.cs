@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using AI.LLM.Services.LLM;
 using FAI.Router.Enums;
+using FAI.Router.Training;
 
 namespace FAI.Router;
 
@@ -21,6 +22,37 @@ namespace FAI.Router;
 /// <param name="Wt">Доля важности времени</param>
 /// <param name="TemperatureScale">Множитель температуры выбора; ноль делает выбор жадным</param>
 public readonly record struct RouteWeights(double WQ, double WC, double Wt, double TemperatureScale);
+
+/// <summary>
+/// Планка достаточности качества на один выбор: какой вероятности лайка должен достигать ответ.
+/// </summary>
+/// <remarks>
+/// Линейная метрика R разменивает качество на цену без ограничений, а потеря от недостаточного
+/// ответа не линейна: человек уходит, и сэкономленное ничего не стоит. Планка меняет смысл выбора:
+/// сначала отсеять тех, кто прогнозируемо не дотягивает, а среди остальных не переплачивать.
+/// </remarks>
+/// <param name="Bar">Какая вероятность лайка обязательна, от 0 до 1</param>
+/// <param name="Calibration">Перевод прогноза качества в вероятность лайка</param>
+/// <param name="PriorRate">Доля лайков по всем ходам: к ней стягивается малоизученный кандидат</param>
+/// <param name="PriorStrength">Сколько оценок весит эта доля против собственного прогноза кандидата</param>
+public readonly record struct SufficiencyBar(double Bar, Calibration Calibration, double PriorRate, double PriorStrength = 5)
+{
+    /// <summary>
+    /// Вероятность, что кандидат с таким прогнозом устроит человека, с усадкой по его опыту.
+    /// </summary>
+    /// <remarks>
+    /// Новый кандидат получает долю лайков по всем ходам, а не свой прогноз: калибровка подобрана на
+    /// тех, кто уже побеждал, и на незнакомом ее наклону верить рано.
+    /// </remarks>
+    /// <param name="experience">Сколько оценок кандидат собрал победителем</param>
+    /// <param name="quality">Прогноз качества кандидата</param>
+    public double Sufficiency(int experience, double quality)
+    {
+        int n = Math.Max(experience, 0);
+
+        return (n * Calibration.Predict(quality) + PriorStrength * PriorRate) / (n + PriorStrength);
+    }
+}
 
 public class Settings
 {

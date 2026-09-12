@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable, TypeVar
 
 import numpy as np
@@ -11,7 +12,7 @@ import numpy as np
 from fai_router.enums import Capability
 from fai_router.routed_element import RoutedElement
 from fai_router.services import InputFeaturesService
-from fai_router.settings import RouteWeights, Settings
+from fai_router.settings import RouteWeights, Settings, SufficiencyBar
 from fai_router.tracking import InputFeatures, Tracert
 
 T = TypeVar("T")
@@ -19,6 +20,21 @@ T = TypeVar("T")
 # Нижняя граница цены под логарифмом, доллары. Бесплатные модели дают нулевую стоимость,
 # а логарифм нуля ушел бы в бесконечность и задавил бы разброс остальных кандидатов
 COST_FLOOR = 1e-5
+
+# Вес качества среди прошедших планку, в долях от суммы весов цены и времени. Качество им уже
+# обеспечено, и платить за лишнее незачем: решают цена и время, а качество остается только разнимать
+# равных. Доля, а не число: постоянный вес 0,05 у заказчика, которому цена почти безразлична (вес
+# цены тоже 0,05), уравнивал качество с ценой, и сильная модель снова выигрывала у достаточной
+SUFFICIENT_QUALITY_SHARE = 0.1
+
+
+@dataclass
+class SufficientTop:
+    """Итог выбора с планкой достаточности: лучшие кандидаты (прошедшие планку по метрике R либо,
+    если не прошел никто, по вероятности достаточности) и дотянул ли кто-нибудь до планки."""
+
+    top: list[tuple[float, RoutedElement]]
+    reached: bool
 
 
 def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
@@ -100,6 +116,30 @@ def get_top_k(features: InputFeatures, elements: Iterable[RoutedElement], topk: 
     ]
     scored.sort(key=lambda item: item[0], reverse=True)
     return scored[:topk]
+
+
+
+def get_sufficient(features: InputFeatures, elements: Iterable[RoutedElement], bar: SufficiencyBar,
+                   topk: int = 5, required: Capability = Capability.NONE,
+                   weights: RouteWeights | None = None) -> SufficientTop:
+    """Выбор по принципу «необходимо и достаточно»: отсеять тех, кто прогнозируемо не дотягивает
+    до планки, а среди остальных взять дешевого и быстрого.
+
+    Не прошел никто, тогда отдаются сильнейшие по вероятности достаточности, а reached ложно.
+    Поднимать ли цену или предупредить человека, решает вызывающий: у него есть то, чего нет у
+    библиотеки, то есть сам человек."""
+    vector = features.feature_vector()
+    scored = [(bar.sufficiency(element.experience, element.get_quality_score(vector)), element)
+              for element in elements if element.supports(features.input_specifications, required)]
+    passing = [element for sufficiency, element in scored if sufficiency >= bar.bar]
+
+    if passing:
+        w = weights or Settings.current()
+        floored = replace(w, WQ=SUFFICIENT_QUALITY_SHARE * (w.WC + w.WT))
+        return SufficientTop(get_top_k(features, passing, topk, required, weights=floored), True)
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return SufficientTop(scored[:topk], False)
 
 
 def execute(trace: Tracert, run: Callable[[RoutedElement], T]) -> T:

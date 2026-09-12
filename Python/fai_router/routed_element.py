@@ -41,6 +41,9 @@ class RoutedElement:
         self.experience = 0
         # Оценка дисперсии отзывов, в формуле температуры это D*_k
         self.score_variance = 0.0
+        # Во сколько раз ход обходится дороже прайса: переделки после отказа приемки. Единица
+        # означает «как по прайсу»; поправку задает вызывающий по накопленным ходам
+        self.cost_ratio = 1.0
 
     def get_quality_score(self, features: np.ndarray) -> float:
         """Прогноз качества: скалярное произведение признаков задачи на вектор кандидата."""
@@ -59,7 +62,12 @@ class RoutedElement:
         return (self.capabilities & required) == required
 
     def get_cost(self, features: InputFeatures) -> float:
-        """Стоимость запроса в долларах по ценам кандидата."""
+        """Ожидаемая стоимость запроса в долларах: прайс с поправкой на то, во что ход обходится на деле."""
+        return self.get_list_cost(features) * self.cost_ratio
+
+    def get_list_cost(self, features: InputFeatures) -> float:
+        """Стоимость по прайсу, без поправки. С ней сравнивается фактическая цена хода, поэтому
+        поправка сюда не входит: иначе она считалась бы сама из себя."""
         return (self.dpmt_inp * features.input_len + self.dpmt_outp * features.len_answer) * 1e-6
 
     def get_time(self, features: InputFeatures) -> float:

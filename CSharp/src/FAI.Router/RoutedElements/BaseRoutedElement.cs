@@ -59,6 +59,16 @@ public class BaseRoutedElement
     public double DPMTOutp { get; set; }
 
     /// <summary>
+    /// Во сколько раз ход на кандидате обходится дороже его прайса.
+    /// </summary>
+    /// <remarks>
+    /// Прайс считает только объем задачи, а на деле ход дорожает от переделок после отказа
+    /// приемки: дешевая модель, которую трижды отправили переделывать, дешева только на бумаге.
+    /// Поправку задает вызывающий по накопленным ходам; единица означает «как по прайсу».
+    /// </remarks>
+    public double CostRatio { get; set; } = 1;
+
+    /// <summary>
     /// Получение оценки качества для данного элемента роутинга
     /// по умолчанию скалярное произведение
     /// </summary>
@@ -94,10 +104,17 @@ public class BaseRoutedElement
     }
 
     /// <summary>
-    /// Стоимость запроса в долларах по ценам кандидата
+    /// Ожидаемая стоимость запроса в долларах: прайс с поправкой на то, во что ход обходится на деле
     /// </summary>
     /// <param name="features">Признаки запроса</param>
-    public double GetCost(InputFeatures features) =>
+    public double GetCost(InputFeatures features) => GetListCost(features) * CostRatio;
+
+    /// <summary>
+    /// Стоимость запроса в долларах по прайсу кандидата, без поправки. С ней сравнивается фактическая
+    /// цена хода, поэтому поправка сюда не входит: иначе она считалась бы сама из себя.
+    /// </summary>
+    /// <param name="features">Признаки запроса</param>
+    public double GetListCost(InputFeatures features) =>
         (DPMTInp * features.InputLen + DPMTOutp * features.LenAnswer) * 1e-6;
 
     /// <summary>

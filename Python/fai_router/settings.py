@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from fai_router.enums import Style
+
+if TYPE_CHECKING:
+    from fai_router.training.calibration import Calibration
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,32 @@ class RouteWeights:
     WT: float
     # Множитель температуры выбора; ноль делает выбор жадным
     temperature_scale: float
+
+
+
+@dataclass(frozen=True)
+class SufficiencyBar:
+    """Планка достаточности качества на один выбор: какой вероятности лайка должен достигать ответ.
+
+    Линейная метрика R разменивает качество на цену без ограничений, а потеря от недостаточного
+    ответа не линейна: человек уходит, и сэкономленное ничего не стоит. Планка меняет смысл выбора:
+    сначала отсеять тех, кто прогнозируемо не дотягивает, а среди остальных не переплачивать."""
+
+    # Какая вероятность лайка обязательна, от 0 до 1
+    bar: float
+    # Перевод прогноза качества в вероятность лайка
+    calibration: "Calibration"
+    # Доля лайков по всем ходам: к ней стягивается малоизученный кандидат
+    prior_rate: float
+    # Сколько оценок весит эта доля против собственного прогноза кандидата
+    prior_strength: float = 5.0
+
+    def sufficiency(self, experience: int, quality: float) -> float:
+        """Вероятность, что кандидат с таким прогнозом устроит человека, с усадкой по его опыту.
+        Новый кандидат получает долю лайков по всем ходам, а не свой прогноз: калибровка подобрана
+        на тех, кто уже побеждал, и на незнакомом ее наклону верить рано."""
+        n = max(experience, 0)
+        return (n * self.calibration.predict(quality) + self.prior_strength * self.prior_rate) / (n + self.prior_strength)
 
 
 class Settings:

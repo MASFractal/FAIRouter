@@ -6,6 +6,14 @@ using FAI.Router.Services;
 namespace FAI.Router;
 
 
+/// <summary>Итог выбора с планкой достаточности.</summary>
+/// <param name="Top">
+/// Лучшие кандидаты: прошедшие планку, упорядоченные по метрике R, либо, если не прошел никто,
+/// упорядоченные по вероятности достаточности
+/// </param>
+/// <param name="Reached">Дотянул ли до планки хоть кто-нибудь</param>
+public sealed record SufficientTop(List<(double Score, BaseRoutedElement Element)> Top, bool Reached);
+
 /// <summary>
 /// Среда для соревнования объектов роутинга
 /// </summary>
@@ -166,10 +174,57 @@ public static class Env
     }
 
     /// <summary>
+    /// Выбор по принципу «необходимо и достаточно»: отсеять тех, кто прогнозируемо не дотягивает до
+    /// планки, а среди остальных взять дешевого и быстрого.
+    /// </summary>
+    /// <remarks>
+    /// Не прошел никто, тогда отдаются сильнейшие по вероятности достаточности, а <c>Reached</c>
+    /// ложно. Поднимать ли цену или предупредить человека, решает вызывающий: у него есть то, чего
+    /// нет у библиотеки, то есть сам человек.
+    /// </remarks>
+    /// <param name="features">Признаки запроса</param>
+    /// <param name="elements">Кандидаты на исполнение</param>
+    /// <param name="bar">Планка достаточности этого выбора</param>
+    /// <param name="topk">Сколько лучших оставить</param>
+    /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static SufficientTop GetSufficient(InputFeatures features, IEnumerable<BaseRoutedElement> elements, SufficiencyBar bar, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
+    {
+        var vector = features.FeatureVector;
+
+        (double Sufficiency, BaseRoutedElement Element)[] scored = [.. elements
+            .Where(element => element.Supports(features.InputSpecifications, required))
+            .Select(element => (bar.Sufficiency(element.Experience, element.GetQualityScore(vector)), element))];
+
+        BaseRoutedElement[] passing = [.. scored.Where(item => item.Sufficiency >= bar.Bar).Select(item => item.Element)];
+
+        if (passing.Length > 0)
+        {
+            RouteWeights w = weights ?? Settings.Current;
+            RouteWeights floored = w with { WQ = SufficientQualityShare * (w.WC + w.Wt) };
+
+            return new SufficientTop(GetTopK(features, passing, topk, required, floored), Reached: true);
+        }
+
+        return new SufficientTop([.. scored.OrderByDescending(item => item.Sufficiency).Take(topk)], Reached: false);
+    }
+
+    /// <summary>
     /// Нижняя граница цены под логарифмом, доллары. Бесплатные модели дают нулевую стоимость,
     /// а логарифм нуля ушел бы в бесконечность и задавил бы разброс остальных кандидатов.
     /// </summary>
     private const double CostFloor = 1e-5;
+
+    /// <summary>
+    /// Вес качества среди прошедших планку, в долях от суммы весов цены и времени. Качество им уже
+    /// обеспечено, и платить за лишнее незачем: решают цена и время, а качество остается только
+    /// разнимать равных.
+    /// </summary>
+    /// <remarks>
+    /// Доля, а не число. Постоянный вес 0,05 у заказчика, которому цена почти безразлична (вес цены
+    /// тоже 0,05), уравнивал качество с ценой, и сильная модель снова выигрывала у достаточной.
+    /// </remarks>
+    private const double SufficientQualityShare = 0.1;
 
     // Приведение к нулевому среднему и единичному разбросу внутри группы. Одинаковые у всех
     // значения дают нули: такое слагаемое на выбор не влияет, и это верно
