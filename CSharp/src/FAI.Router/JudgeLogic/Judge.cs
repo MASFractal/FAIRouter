@@ -51,33 +51,45 @@ public class Judge
     /// </summary>
     /// <param name="inputSpec">Запрашиваемые параметры</param>
     /// <param name="actualSpec">Фактические параметры ответа</param>
-    public static DiffSpec Criticize(Specifications inputSpec, Specifications actualSpec) =>
-        DiffSpec.Compare(inputSpec, actualSpec);
+    /// <param name="content">Оценка содержания; с ней разбор включает и расхождения по содержанию</param>
+    public static DiffSpec Criticize(Specifications inputSpec, Specifications actualSpec, ContentReview? content = null) =>
+        DiffSpec.Compare(inputSpec, actualSpec, content);
 
     /// <summary>
     /// Итоговая оценка ответа: содержание и форма с долями из <see cref="Settings.ContentWeight"/>.
-    /// Форма здесь это доля выполненных пунктов критика: число объяснимое и не зависящее от
+    /// Форма здесь это доля выполненных пунктов формы критика: число объяснимое и не зависящее от
     /// обучаемой матрицы. Без оценки содержания итог равен форме.
     /// </summary>
-    /// <param name="form">Разбор формы</param>
+    /// <param name="critic">Разбор критика</param>
     /// <param name="content">Оценка содержания; пусто, если ее не делали</param>
-    public static double Assess(DiffSpec form, ContentReview? content)
+    public static double Assess(DiffSpec critic, ContentReview? content)
     {
-        double formScore = 1 - form.TotalDeviation;
+        double formScore = 1 - critic.FormDeviation;
 
         return content is null ? formScore : Settings.ContentWeight * content.Score + (1 - Settings.ContentWeight) * formScore;
     }
 
     /// <summary>
-    /// Отчет по обеим осям: сначала содержание с замечаниями, потом проваленные пункты формы
+    /// Отчет: оценки содержания, формы и итог, затем все проваленные пункты ТЗ и замечания судьи
     /// </summary>
-    /// <param name="form">Разбор формы</param>
+    /// <param name="critic">Разбор критика</param>
     /// <param name="content">Оценка содержания; пусто, если ее не делали</param>
-    public static string Report(DiffSpec form, ContentReview? content)
+    public static string Report(DiffSpec critic, ContentReview? content)
     {
-        string formPart = $"Форма {(1 - form.TotalDeviation).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}"
-            + (form.Mismatches.Any() ? Environment.NewLine + form : "");
+        string form = Format(1 - critic.FormDeviation);
+        string head = content is null
+            ? $"Форма {form}"
+            : $"Содержание {Format(content.Score)}, форма {form}, итог {Format(Assess(critic, content))}";
 
-        return content is null ? formPart : content + Environment.NewLine + formPart;
+        IEnumerable<string> lines =
+        [
+            head,
+            .. critic.Mismatches.Select(item => $"{item.Field}: заказано {item.Requested}, получено {item.Actual}"),
+            .. (content?.Issues ?? []).Select(issue => "- " + issue),
+        ];
+
+        return string.Join(Environment.NewLine, lines);
     }
+
+    private static string Format(double value) => value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
 }

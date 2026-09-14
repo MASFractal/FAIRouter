@@ -144,7 +144,7 @@ class FaiRouter:
             answer.actual = self._measurer.get_specifications(completion.text)
             answer.content = self.content_judge.review(prompt, trace.requested_spec, completion.text)
             answer.score = self.judge.rate(trace, trace.requested_spec, answer.actual)
-            answer.critic = Judge.criticize(trace.requested_spec, answer.actual)
+            answer.critic = Judge.criticize(trace.requested_spec, answer.actual, answer.content)
             answer.assessment = Judge.assess(answer.critic, answer.content)
 
         if self.traces is not None:

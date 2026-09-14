@@ -18,14 +18,30 @@ public sealed record FactClaim(string Text, double Truth);
 public sealed record ContentCriterion(string Name, double? Score);
 
 /// <summary>
+/// Насколько ответ раскрыл смысловой пункт заказа
+/// </summary>
+/// <param name="Point">Пункт заказа</param>
+/// <param name="Coverage">0 означает, что пункта нет; 0,5 упомянут без раскрытия; 1 раскрыт по сути</param>
+public sealed record PointCoverage(string Point, double Coverage);
+
+/// <summary>
+/// Соблюдено ли явное ограничение заказа
+/// </summary>
+/// <param name="Constraint">Ограничение заказа</param>
+/// <param name="Met">Соблюдено</param>
+public sealed record ConstraintCheck(string Constraint, bool Met);
+
+/// <summary>
 /// Оценка содержания ответа: то, что не видно по форме. Таблица с выдуманными цифрами,
 /// отчет не про ту аналитику и несуществующие источники проходят сверку формы на отлично, а
 /// здесь проваливаются.
 /// </summary>
 /// <remarks>
-/// Критерий, который к задаче не относится, в среднее не входит: у задачи без ограничений нечего
-/// выполнять, у ответа без проверяемых утверждений нечего проверять. Воздержание от фактов не
-/// штрафуется, ложный факт штрафуется, как в рейтинге фактологии арены.
+/// Кроме оценок по критериям, судья отвечает по каждому смысловому пункту и каждому ограничению
+/// заказа и называет уровень экспертности самого ответа. Из этого критик (<see cref="DiffSpec"/>)
+/// строит построчный разбор всех расхождений с заданием. Критерий, который к задаче не относится,
+/// в среднее не входит. Воздержание от фактов не штрафуется, ложный факт штрафуется, как в
+/// рейтинге фактологии арены.
 /// </remarks>
 public sealed class ContentReview
 {
@@ -50,15 +66,30 @@ public sealed class ContentReview
     /// <summary>Конкретные замечания по содержанию: что неверно или упущено и где</summary>
     public IReadOnlyList<string> Issues { get; }
 
+    /// <summary>Раскрытие каждого смыслового пункта заказа, в порядке заказа</summary>
+    public IReadOnlyList<PointCoverage> Points { get; }
+
+    /// <summary>Соблюдение каждого явного ограничения заказа, в порядке заказа</summary>
+    public IReadOnlyList<ConstraintCheck> ConstraintChecks { get; }
+
+    /// <summary>Уровень экспертности самого ответа по шкале экспертности заказа; пусто, если судья его не назвал</summary>
+    public double? ExpertLevel { get; }
+
     /// <summary>Оценка содержания: среднее по критериям, которые относятся к задаче</summary>
     public double Score =>
         Criteria.Where(item => item.Score is not null).Select(item => item.Score!.Value).DefaultIfEmpty(1).Average();
 
-    public ContentReview(IReadOnlyList<ContentCriterion> criteria, IReadOnlyList<FactClaim> claims, IReadOnlyList<string> issues)
+    public ContentReview(
+        IReadOnlyList<ContentCriterion> criteria, IReadOnlyList<FactClaim> claims, IReadOnlyList<string> issues,
+        IReadOnlyList<PointCoverage>? points = null, IReadOnlyList<ConstraintCheck>? constraintChecks = null,
+        double? expertLevel = null)
     {
         Criteria = criteria;
         Claims = claims;
         Issues = issues;
+        Points = points ?? [];
+        ConstraintChecks = constraintChecks ?? [];
+        ExpertLevel = expertLevel;
     }
 
     /// <summary>Оценка критерия по названию; пусто, если критерий к задаче не относится</summary>

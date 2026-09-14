@@ -62,6 +62,9 @@ GROUPS = {
 
 _lock = threading.Lock()
 
+# Метка кэша распознанных заданий и их оценок; задается ключом --spec-tag
+SPEC_TAG = ""
+
 
 def api_key() -> str:
     if os.environ.get("OPENROUTER_API_KEY"):
@@ -97,7 +100,7 @@ def group_of(kind: str) -> str:
 
 
 def recognize(cache: dict, recognizer: SpecInputRecognizer, prompt: str) -> Specifications:
-    return Specifications.from_dict(cached(cache, "spec:" + prompt, lambda: recognizer.get_specifications(prompt).to_dict()))
+    return Specifications.from_dict(cached(cache, f"spec{SPEC_TAG}:" + prompt, lambda: recognizer.get_specifications(prompt).to_dict()))
 
 
 def assess(cache: dict, key: str, prompt: str, order: Specifications, answer: str,
@@ -107,15 +110,17 @@ def assess(cache: dict, key: str, prompt: str, order: Specifications, answer: st
     def compute() -> dict:
         actual = measurer.get_specifications(answer)
         content = judge.review(prompt, order, answer)
-        form = Judge.criticize(order, actual)
+        critic = Judge.criticize(order, actual, content)
         return {
-            "form": 1 - form.total_deviation,
+            "form": 1 - critic.form_deviation,
             "content": content.score,
-            "assessment": Judge.assess(form, content),
+            "assessment": Judge.assess(critic, content),
             "criteria": {item.name: item.score for item in content.criteria},
             "claims": [{"text": claim.text, "truth": claim.truth} for claim in content.claims],
             "issues": content.issues,
-            "form_mismatches": [item.field for item in form.mismatches],
+            "form_mismatches": [item.field for item in critic.mismatches if not item.content],
+            "mismatches": [f"{item.field}: заказано {item.requested}, получено {item.actual}"
+                           for item in critic.mismatches if item.content],
         }
 
     return cached(cache, key, compute)
@@ -145,6 +150,9 @@ def measure_recognition(cache: dict, tasks: list[dict], recognizer: SpecInputRec
     misses = [(task["id"], task["kind"], spec.task_kind.value) for spec, task in zip(specs, tasks)
               if spec.task_kind.value != task["kind"]]
     print("\nПромахи типа задачи: " + "; ".join(f"{i} {want} -> {got}" for i, want, got in misses))
+    domain_misses = [(task["id"], task["domain"], spec.domain.value) for spec, task in zip(specs, tasks)
+                     if spec.domain.value != task["domain"]]
+    print("\nПромахи области: " + "; ".join(f"{i} {want} -> {got}" for i, want, got in domain_misses))
 
 
 def measure_live(cache: dict, tasks: list[dict], recognizer: SpecInputRecognizer, key: str,
@@ -160,7 +168,7 @@ def measure_live(cache: dict, tasks: list[dict], recognizer: SpecInputRecognizer
         task, model = pair
         order = recognize(cache, recognizer, task["prompt"])
         text = answer(task, model)
-        return task, model, assess(cache, f"assess:{model}:{task['id']}", task["prompt"], order, text, measurer, judge)
+        return task, model, assess(cache, f"assess{SPEC_TAG}:{model}:{task['id']}", task["prompt"], order, text, measurer, judge)
 
     with ThreadPoolExecutor(8) as pool:
         rows = list(pool.map(run, [(task, model) for task in live for model in CANDIDATES]))
@@ -234,7 +242,7 @@ def measure_controls(cache: dict, recognizer: SpecInputRecognizer, measurer: Spe
     def run(item):
         pair, side = item
         order = recognize(cache, recognizer, pair["prompt"])
-        return pair, side, assess(cache, f"control:{pair['id']}:{side}", pair["prompt"], order, pair[side], measurer, judge)
+        return pair, side, assess(cache, f"control{SPEC_TAG}:{pair['id']}:{side}", pair["prompt"], order, pair[side], measurer, judge)
 
     with ThreadPoolExecutor(8) as pool:
         rows = list(pool.map(run, [(pair, side) for pair in pairs for side in ("good", "bad")]))
@@ -250,7 +258,10 @@ def measure_controls(cache: dict, recognizer: SpecInputRecognizer, measurer: Spe
               f"{good['content']:.2f} / {bad['content']:.2f} | {good['assessment']:.2f} / {bad['assessment']:.2f} |")
     for pair in pairs:
         bad = by[(pair["id"], "bad")]
-        print(f"\nЗамечания судьи к плохому ответу «{pair['id']}»: " + "; ".join(bad["issues"][:4]))
+        print(f"\nРасхождения с ТЗ у плохого ответа «{pair['id']}» ({len(bad['mismatches'])}): "
+              + "; ".join(bad["mismatches"][:8]))
+        print(f"Расхождения с ТЗ у хорошего ответа «{pair['id']}» ({len(by[(pair['id'], 'good')]['mismatches'])}): "
+              + "; ".join(by[(pair['id'], 'good')]['mismatches'][:8]))
 
 
 def avg(values) -> float:
@@ -262,7 +273,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="сколько задач брать (для пробного прогона)")
     parser.add_argument("--only", choices=["recognition", "live", "controls"])
+    parser.add_argument("--spec-tag", default="", help="метка кэша заданий: новый замер распознавания рядом с прежним")
     args = parser.parse_args()
+    global SPEC_TAG
+    SPEC_TAG = args.spec_tag
 
     key = api_key()
     cache = load_cache()

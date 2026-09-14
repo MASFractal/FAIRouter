@@ -1,10 +1,12 @@
 """Судья содержания: одно обращение к модели по строгой схеме.
 
 Оценивает то, что сверка формы не видит: верность фактов, полноту по сути, выполнение указаний,
-рассуждения, глубину, наполненность структуры, источники и пригодность для дела. Факты проверяются
-так же, как в рейтинге фактологии арены: из ответа выписываются атомарные проверяемые утверждения,
-у каждого своя вероятность истинности. Без проверки по вебу эту вероятность ставит сама
-модель-судья; хост с веб-поиском передает проверку функцией verify."""
+рассуждения, глубину, наполненность структуры, источники и пригодность для дела. По каждому
+смысловому пункту и каждому ограничению заказа судья отвечает отдельно, а уровень экспертности
+ответа называет по шкале экспертности заказа: критик сверяет с заданием каждую из этих величин.
+Факты проверяются так же, как в рейтинге фактологии арены: из ответа выписываются атомарные
+проверяемые утверждения, у каждого своя вероятность истинности. Без проверки по вебу эту
+вероятность ставит сама модель-судья; хост с веб-поиском передает проверку функцией verify."""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import json
 from typing import Any, Callable
 
 from fai_router import content_review as cr
-from fai_router.content_review import ContentCriterion, ContentReview, FactClaim
+from fai_router.content_review import ConstraintCheck, ContentCriterion, ContentReview, FactClaim, PointCoverage
 from fai_router.llm.client import OpenRouterClient
 from fai_router.settings import Settings
 from fai_router.specifications import Specifications
@@ -25,12 +27,24 @@ SYSTEM_PROMPT = (
     "Ты строгий эксперт-приемщик. Оцени СОДЕРЖАНИЕ ответа на задание, а не оформление: объем, "
     "число разделов и таблиц проверяет код. Выпиши до 12 атомарных проверяемых утверждений "
     "ответа (даты, числа, имена, нормы, характеристики) и для каждого вероятность, что оно "
-    "верно; мнения, оценки и вымысел не выписывай. Затем оцени критерии от 0 до 1 по опорным "
-    "точкам. В issues перечисли конкретные замечания по содержанию: что именно неверно или "
-    "упущено и где. Ответ хорош, значит issues пусто."
+    "верно; мнения, оценки и вымысел не выписывай. По каждому смысловому пункту задания, в том "
+    "же порядке, оцени, насколько он раскрыт; по каждому ограничению, в том же порядке, "
+    "соблюдено ли оно. Уровень экспертности ответа оцени по той же шкале, что и экспертность "
+    "задания. Затем оцени критерии от 0 до 1 по опорным точкам. В issues перечисли конкретные "
+    "замечания по содержанию: что именно неверно или упущено и где. Ответ хорош, значит issues пусто."
 )
 
-# Опорные точки критериев; текст общий с версией на C#
+# Опорные точки; текст общий с версией на C#
+POINTS = (
+    "По каждому смысловому пункту задания в том же порядке: насколько он раскрыт, 0-1. 1 - "
+    "раскрыт по сути; 0.5 - упомянут без раскрытия; 0 - отсутствует или раскрыт неверно. "
+    "Пусто, если пунктов нет."
+)
+CONSTRAINTS = "По каждому ограничению задания в том же порядке: соблюдено ли оно. Пусто, если ограничений нет."
+EXPERT_LEVEL = (
+    "Уровень экспертности самого ответа, 0-1, по той же шкале, что экспертность задания: 0.1 - "
+    "бытовой уровень; 0.4 - грамотный пользователь; 0.7 - специалист; 0.9 - эксперт."
+)
 COMPLETENESS = (
     "Раскрыты ли смысловые пункты задания по сути, 0-1. 1 - каждый пункт раскрыт содержательно; "
     "0.6 - часть пунктов упомянута без раскрытия; 0.3 - раскрыта меньшая часть; 0 - ответ не о том."
@@ -66,23 +80,28 @@ def _criterion(description: str) -> dict[str, Any]:
     return {"type": "number", "minimum": 0, "maximum": 1, "description": description}
 
 
+def _array(description: str, properties: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "description": description,
+            "items": {"type": "object", "properties": properties, "required": list(properties),
+                      "additionalProperties": False}}
+
+
 SCHEMA = {
     "type": "object",
     "properties": {
-        "claims": {
-            "type": "array",
-            "description": "До 12 атомарных проверяемых утверждений ответа",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Утверждение одной фразой"},
-                    "truth": {"type": "number", "minimum": 0, "maximum": 1,
-                              "description": "Вероятность, что утверждение верно"},
-                },
-                "required": ["text", "truth"],
-                "additionalProperties": False,
-            },
-        },
+        "claims": _array("До 12 атомарных проверяемых утверждений ответа", {
+            "text": {"type": "string", "description": "Утверждение одной фразой"},
+            "truth": {"type": "number", "minimum": 0, "maximum": 1, "description": "Вероятность, что утверждение верно"},
+        }),
+        "points": _array(POINTS, {
+            "point": {"type": "string", "description": "Пункт задания"},
+            "coverage": {"type": "number", "minimum": 0, "maximum": 1, "description": "Насколько раскрыт"},
+        }),
+        "constraints": _array(CONSTRAINTS, {
+            "constraint": {"type": "string", "description": "Ограничение задания"},
+            "met": {"type": "boolean", "description": "Соблюдено ли"},
+        }),
+        "expertLevel": _criterion(EXPERT_LEVEL),
         "completeness": _criterion(COMPLETENESS),
         "instructionFollowing": _criterion(INSTRUCTION_FOLLOWING),
         "reasoning": _criterion(REASONING),
@@ -93,8 +112,8 @@ SCHEMA = {
         "issues": {"type": "array", "items": {"type": "string"},
                    "description": "Конкретные замечания по содержанию"},
     },
-    "required": ["claims", "completeness", "instructionFollowing", "reasoning", "expertise",
-                 "structureContent", "sourceQuality", "fitForPurpose", "issues"],
+    "required": ["claims", "points", "constraints", "expertLevel", "completeness", "instructionFollowing",
+                 "reasoning", "expertise", "structureContent", "sourceQuality", "fitForPurpose", "issues"],
     "additionalProperties": False,
 }
 
@@ -136,22 +155,34 @@ def claims_of(verdict: dict[str, Any]) -> list[FactClaim]:
     """Утверждения из ответа модели: не больше MAX_CLAIMS, пустые пропускаются."""
     claims = []
     for item in [item for item in (verdict.get("claims") or []) if str(item.get("text") or "").strip()][:MAX_CLAIMS]:
-        claims.append(FactClaim(str(item["text"]).strip(), min(max(float(item.get("truth", 0.0)), 0.0), 1.0)))
+        claims.append(FactClaim(str(item["text"]).strip(), _clamp(item.get("truth", 0.0))))
     return claims
 
 
 def build(requested: Specifications, verdict: dict[str, Any], claims: list[FactClaim]) -> ContentReview:
-    """Оценка по ответу модели. Критерий, который к задаче не относится, остается пустым."""
+    """Оценка по ответу модели. Пункты и ограничения берутся в порядке заказа: пропущенный судьей
+    пункт получает общую полноту, пропущенное ограничение считается соблюденным, если общая оценка
+    выполнения указаний не ниже половины. Критерий, который к задаче не относится, остается пустым."""
 
     def score(key: str) -> float:
-        return min(max(float(verdict.get(key, 1.0)), 0.0), 1.0)
+        return _clamp(verdict.get(key, 1.0))
+
+    points = verdict.get("points") or []
+    constraints = verdict.get("constraints") or []
+    coverage = [PointCoverage(point, _clamp(points[i].get("coverage", 0.0)) if i < len(points) else score("completeness"))
+                for i, point in enumerate(requested.required_points)]
+    checks = [ConstraintCheck(constraint, bool(constraints[i].get("met")) if i < len(constraints)
+                              else score("instructionFollowing") >= 0.5)
+              for i, constraint in enumerate(requested.constraints)]
+    completeness = sum(item.coverage for item in coverage) / len(coverage) if coverage else score("completeness")
+    instruction = sum(1 for item in checks if item.met) / len(checks) if checks else None
+    level = verdict.get("expertLevel")
 
     return ContentReview(
         criteria=[
             ContentCriterion(cr.FACTUALITY, ContentReview.factuality_of(claims)),
-            ContentCriterion(cr.COMPLETENESS, score("completeness")),
-            ContentCriterion(cr.INSTRUCTION_FOLLOWING,
-                             score("instructionFollowing") if requested.constraints else None),
+            ContentCriterion(cr.COMPLETENESS, completeness),
+            ContentCriterion(cr.INSTRUCTION_FOLLOWING, instruction),
             ContentCriterion(cr.REASONING, score("reasoning")),
             ContentCriterion(cr.EXPERTISE, score("expertise")),
             ContentCriterion(cr.STRUCTURE_CONTENT, score("structureContent")),
@@ -160,12 +191,24 @@ def build(requested: Specifications, verdict: dict[str, Any], claims: list[FactC
         ],
         claims=claims,
         issues=[str(issue) for issue in (verdict.get("issues") or []) if str(issue).strip()],
+        points=coverage,
+        constraint_checks=checks,
+        expert_level=None if level is None else _clamp(level),
     )
 
 
 def user_message(task: str, requested: Specifications, answer: str) -> str:
-    points = "\n- " + "\n- ".join(requested.required_points) if requested.required_points else "не выделены"
-    constraints = "\n- " + "\n- ".join(requested.constraints) if requested.constraints else "нет"
+    points = _numbered(requested.required_points) if requested.required_points else "не выделены"
+    constraints = _numbered(requested.constraints) if requested.constraints else "нет"
     clipped = answer if len(answer) <= _ANSWER_CHARS else answer[:_ANSWER_CHARS] + "\n[…ответ обрезан для судьи]"
     return (f"ЗАДАНИЕ:\n{task}\n\nСМЫСЛОВЫЕ ПУНКТЫ: {points}\n\nОГРАНИЧЕНИЯ: {constraints}\n\n"
+            f"ЭКСПЕРТНОСТЬ ЗАДАНИЯ: {requested.expert_level:.2f}\n\n"
             f"НУЖНЫ ИСТОЧНИКИ: {'да' if requested.has_references else 'нет'}\n\nОТВЕТ:\n{clipped}")
+
+
+def _numbered(items: list[str]) -> str:
+    return "\n" + "\n".join(f"{i + 1}. {item}" for i, item in enumerate(items))
+
+
+def _clamp(value: Any) -> float:
+    return min(max(float(value), 0.0), 1.0)

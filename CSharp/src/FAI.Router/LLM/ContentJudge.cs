@@ -13,10 +13,12 @@ namespace FAI.Router.LLM;
 /// наполненность структуры, источники и пригодность для дела.
 /// </summary>
 /// <remarks>
-/// Факты проверяются так же, как в рейтинге фактологии арены: из ответа выписываются атомарные
-/// проверяемые утверждения, и у каждого своя вероятность истинности. Без проверки по вебу эту
-/// вероятность ставит сама модель-судья, то есть она сама себе фактчекер. Хост с веб-поиском
-/// передает проверку делегатом, и тогда вероятность дает он.
+/// По каждому смысловому пункту и каждому ограничению заказа судья отвечает отдельно, а уровень
+/// экспертности ответа называет по шкале экспертности заказа: критик сверяет с заданием каждую из
+/// этих величин. Факты проверяются так же, как в рейтинге фактологии арены: из ответа
+/// выписываются атомарные проверяемые утверждения, и у каждого своя вероятность истинности. Без
+/// проверки по вебу эту вероятность ставит сама модель-судья, то есть она сама себе фактчекер.
+/// Хост с веб-поиском передает проверку делегатом, и тогда вероятность дает он.
 /// </remarks>
 public class ContentJudge
 {
@@ -29,9 +31,11 @@ public class ContentJudge
         "Ты строгий эксперт-приемщик. Оцени СОДЕРЖАНИЕ ответа на задание, а не оформление: объем, "
         + "число разделов и таблиц проверяет код. Выпиши до 12 атомарных проверяемых утверждений "
         + "ответа (даты, числа, имена, нормы, характеристики) и для каждого вероятность, что оно "
-        + "верно; мнения, оценки и вымысел не выписывай. Затем оцени критерии от 0 до 1 по опорным "
-        + "точкам. В issues перечисли конкретные замечания по содержанию: что именно неверно или "
-        + "упущено и где. Ответ хорош, значит issues пусто.";
+        + "верно; мнения, оценки и вымысел не выписывай. По каждому смысловому пункту задания, в том "
+        + "же порядке, оцени, насколько он раскрыт; по каждому ограничению, в том же порядке, "
+        + "соблюдено ли оно. Уровень экспертности ответа оцени по той же шкале, что и экспертность "
+        + "задания. Затем оцени критерии от 0 до 1 по опорным точкам. В issues перечисли конкретные "
+        + "замечания по содержанию: что именно неверно или упущено и где. Ответ хорош, значит issues пусто.";
 
     private static readonly string SchemaJson = BuildSchema();
 
@@ -106,22 +110,47 @@ public class ContentJudge
     }
 
     /// <summary>
-    /// Собирает оценку по ответу модели. Критерий, который к задаче не относится, остается пустым
+    /// Собирает оценку по ответу модели. Пункты и ограничения берутся в порядке заказа: пропущенный
+    /// судьей пункт получает общую полноту, пропущенное ограничение считается соблюденным, если
+    /// общая оценка выполнения указаний не ниже половины. Критерий, который к задаче не относится,
+    /// остается пустым.
     /// </summary>
-    internal static ContentReview Build(Specifications requested, Verdict verdict, IReadOnlyList<FactClaim> claims) =>
-        new(
+    internal static ContentReview Build(Specifications requested, Verdict verdict, IReadOnlyList<FactClaim> claims)
+    {
+        List<VerdictPoint> points = verdict.Points ?? [];
+        List<VerdictConstraint> constraints = verdict.Constraints ?? [];
+
+        List<PointCoverage> coverage =
         [
-            new(ContentReview.Factuality, ContentReview.FactualityOf(claims)),
-            new(ContentReview.Completeness, Clamp(verdict.Completeness)),
-            new(ContentReview.InstructionFollowing, requested.Constraints.Count == 0 ? null : Clamp(verdict.InstructionFollowing)),
-            new(ContentReview.Reasoning, Clamp(verdict.Reasoning)),
-            new(ContentReview.Expertise, Clamp(verdict.Expertise)),
-            new(ContentReview.StructureContent, Clamp(verdict.StructureContent)),
-            new(ContentReview.SourceQuality, requested.HasReferences ? Clamp(verdict.SourceQuality) : null),
-            new(ContentReview.FitForPurpose, Clamp(verdict.FitForPurpose)),
-        ],
-        claims,
-        [.. (verdict.Issues ?? []).Where(issue => !string.IsNullOrWhiteSpace(issue))]);
+            .. requested.RequiredPoints.Select((point, i) =>
+                new PointCoverage(point, Clamp(i < points.Count ? points[i].Coverage : verdict.Completeness)))
+        ];
+        List<ConstraintCheck> checks =
+        [
+            .. requested.Constraints.Select((constraint, i) =>
+                new ConstraintCheck(constraint, i < constraints.Count ? constraints[i].Met : verdict.InstructionFollowing >= 0.5))
+        ];
+
+        double completeness = coverage.Count > 0 ? coverage.Average(item => item.Coverage) : Clamp(verdict.Completeness);
+        double? instruction = checks.Count == 0 ? null : checks.Count(item => item.Met) / (double)checks.Count;
+
+        return new(
+            [
+                new(ContentReview.Factuality, ContentReview.FactualityOf(claims)),
+                new(ContentReview.Completeness, completeness),
+                new(ContentReview.InstructionFollowing, instruction),
+                new(ContentReview.Reasoning, Clamp(verdict.Reasoning)),
+                new(ContentReview.Expertise, Clamp(verdict.Expertise)),
+                new(ContentReview.StructureContent, Clamp(verdict.StructureContent)),
+                new(ContentReview.SourceQuality, requested.HasReferences ? Clamp(verdict.SourceQuality) : null),
+                new(ContentReview.FitForPurpose, Clamp(verdict.FitForPurpose)),
+            ],
+            claims,
+            [.. (verdict.Issues ?? []).Where(issue => !string.IsNullOrWhiteSpace(issue))],
+            coverage,
+            checks,
+            verdict.ExpertLevel is { } level ? Clamp(level) : null);
+    }
 
     private static double Clamp(double value) => Math.Clamp(value, 0, 1);
 
@@ -135,13 +164,17 @@ public class ContentJudge
 
     private static string UserMessage(string task, Specifications requested, string answer)
     {
-        string points = requested.RequiredPoints.Count == 0 ? "не выделены" : "\n- " + string.Join("\n- ", requested.RequiredPoints);
-        string constraints = requested.Constraints.Count == 0 ? "нет" : "\n- " + string.Join("\n- ", requested.Constraints);
+        string points = requested.RequiredPoints.Count == 0 ? "не выделены" : Numbered(requested.RequiredPoints);
+        string constraints = requested.Constraints.Count == 0 ? "нет" : Numbered(requested.Constraints);
         string clipped = answer.Length <= AnswerChars ? answer : answer[..AnswerChars] + "\n[…ответ обрезан для судьи]";
 
         return $"ЗАДАНИЕ:\n{task}\n\nСМЫСЛОВЫЕ ПУНКТЫ: {points}\n\nОГРАНИЧЕНИЯ: {constraints}\n\n"
+            + $"ЭКСПЕРТНОСТЬ ЗАДАНИЯ: {requested.ExpertLevel:0.00}\n\n"
             + $"НУЖНЫ ИСТОЧНИКИ: {(requested.HasReferences ? "да" : "нет")}\n\nОТВЕТ:\n{clipped}";
     }
+
+    private static string Numbered(IReadOnlyList<string> items) =>
+        "\n" + string.Join("\n", items.Select((item, i) => $"{i + 1}. {item}"));
 
     private static string BuildSchema()
     {
@@ -166,6 +199,39 @@ public class ContentJudge
                         additionalProperties = false
                     }
                 },
+                points = new
+                {
+                    type = "array",
+                    description = ContentCriteriaDescriptions.Points,
+                    items = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            point = new { type = "string", description = "Пункт задания" },
+                            coverage = new { type = "number", minimum = 0, maximum = 1, description = "Насколько раскрыт" }
+                        },
+                        required = new[] { "point", "coverage" },
+                        additionalProperties = false
+                    }
+                },
+                constraints = new
+                {
+                    type = "array",
+                    description = ContentCriteriaDescriptions.Constraints,
+                    items = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            constraint = new { type = "string", description = "Ограничение задания" },
+                            met = new { type = "boolean", description = "Соблюдено ли" }
+                        },
+                        required = new[] { "constraint", "met" },
+                        additionalProperties = false
+                    }
+                },
+                expertLevel = Criterion(ContentCriteriaDescriptions.ExpertLevel),
                 completeness = Criterion(ContentCriteriaDescriptions.Completeness),
                 instructionFollowing = Criterion(ContentCriteriaDescriptions.InstructionFollowing),
                 reasoning = Criterion(ContentCriteriaDescriptions.Reasoning),
@@ -177,8 +243,8 @@ public class ContentJudge
             },
             required = new[]
             {
-                "claims", "completeness", "instructionFollowing", "reasoning", "expertise",
-                "structureContent", "sourceQuality", "fitForPurpose", "issues"
+                "claims", "points", "constraints", "expertLevel", "completeness", "instructionFollowing",
+                "reasoning", "expertise", "structureContent", "sourceQuality", "fitForPurpose", "issues"
             },
             additionalProperties = false
         };
@@ -192,6 +258,9 @@ public class ContentJudge
     internal sealed class Verdict
     {
         public List<VerdictClaim>? Claims { get; set; }
+        public List<VerdictPoint>? Points { get; set; }
+        public List<VerdictConstraint>? Constraints { get; set; }
+        public double? ExpertLevel { get; set; }
         public double Completeness { get; set; } = 1;
         public double InstructionFollowing { get; set; } = 1;
         public double Reasoning { get; set; } = 1;
@@ -211,6 +280,26 @@ public class ContentJudge
         [JsonPropertyName("truth")]
         public double Truth { get; set; }
     }
+
+    /// <summary>Раскрытие пункта в ответе модели</summary>
+    internal sealed class VerdictPoint
+    {
+        [JsonPropertyName("point")]
+        public string? Point { get; set; }
+
+        [JsonPropertyName("coverage")]
+        public double Coverage { get; set; }
+    }
+
+    /// <summary>Соблюдение ограничения в ответе модели</summary>
+    internal sealed class VerdictConstraint
+    {
+        [JsonPropertyName("constraint")]
+        public string? Constraint { get; set; }
+
+        [JsonPropertyName("met")]
+        public bool Met { get; set; }
+    }
 }
 
 /// <summary>
@@ -219,6 +308,18 @@ public class ContentJudge
 /// </summary>
 internal static class ContentCriteriaDescriptions
 {
+    public const string Points =
+        "По каждому смысловому пункту задания в том же порядке: насколько он раскрыт, 0-1. 1 - "
+        + "раскрыт по сути; 0.5 - упомянут без раскрытия; 0 - отсутствует или раскрыт неверно. "
+        + "Пусто, если пунктов нет.";
+
+    public const string Constraints =
+        "По каждому ограничению задания в том же порядке: соблюдено ли оно. Пусто, если ограничений нет.";
+
+    public const string ExpertLevel =
+        "Уровень экспертности самого ответа, 0-1, по той же шкале, что экспертность задания: 0.1 - "
+        + "бытовой уровень; 0.4 - грамотный пользователь; 0.7 - специалист; 0.9 - эксперт.";
+
     public const string Completeness =
         "Раскрыты ли смысловые пункты задания по сути, 0-1. 1 - каждый пункт раскрыт содержательно; "
         + "0.6 - часть пунктов упомянута без раскрытия; 0.3 - раскрыта меньшая часть; 0 - ответ не о том.";

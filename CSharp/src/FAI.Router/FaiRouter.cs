@@ -147,7 +147,7 @@ public class FaiRouter
             actual = await measuring.ConfigureAwait(false);
             content = await reviewing.ConfigureAwait(false);
             score = Judge.Rate(trace, trace.RequestedSpec, actual);
-            critic = Judge.Criticize(trace.RequestedSpec, actual);
+            critic = Judge.Criticize(trace.RequestedSpec, actual, content);
             assessment = Judge.Assess(critic, content);
         }
 

@@ -34,22 +34,30 @@ class Judge:
         return trace.score
 
     @staticmethod
-    def criticize(input_spec: Specifications, actual_spec: Specifications) -> DiffSpec:
-        """Режим критика: расхождения между заданием и фактом по каждому пункту."""
-        return DiffSpec.compare(input_spec, actual_spec)
+    def criticize(input_spec: Specifications, actual_spec: Specifications,
+                  content: ContentReview | None = None) -> DiffSpec:
+        """Режим критика: расхождения между заданием и фактом по каждому пункту; с оценкой
+        содержания и по содержанию."""
+        return DiffSpec.compare(input_spec, actual_spec, content)
 
     @staticmethod
-    def assess(form: DiffSpec, content: ContentReview | None) -> float:
+    def assess(critic: DiffSpec, content: ContentReview | None) -> float:
         """Итоговая оценка ответа: содержание и форма с долями из Settings.content_weight. Форма
-        здесь это доля выполненных пунктов критика: число объяснимое и не зависящее от обучаемой
-        матрицы. Без оценки содержания итог равен форме."""
-        form_score = 1.0 - form.total_deviation
+        здесь это доля выполненных пунктов формы критика: число объяснимое и не зависящее от
+        обучаемой матрицы. Без оценки содержания итог равен форме."""
+        form_score = 1.0 - critic.form_deviation
         if content is None:
             return form_score
         return Settings.content_weight * content.score + (1.0 - Settings.content_weight) * form_score
 
     @staticmethod
-    def report(form: DiffSpec, content: ContentReview | None) -> str:
-        """Отчет по обеим осям: сначала содержание с замечаниями, потом проваленные пункты формы."""
-        form_part = f"Форма {1.0 - form.total_deviation:.2f}" + (f"\n{form}" if form.mismatches else "")
-        return form_part if content is None else f"{content}\n{form_part}"
+    def report(critic: DiffSpec, content: ContentReview | None) -> str:
+        """Отчет: оценки содержания, формы и итог, затем все проваленные пункты задания и
+        замечания судьи."""
+        form = f"{1.0 - critic.form_deviation:.2f}"
+        head = (f"Форма {form}" if content is None
+                else f"Содержание {content.score:.2f}, форма {form}, итог {Judge.assess(critic, content):.2f}")
+        lines = [head]
+        lines += [f"{item.field}: заказано {item.requested}, получено {item.actual}" for item in critic.mismatches]
+        lines += [f"- {issue}" for issue in (content.issues if content is not None else [])]
+        return "\n".join(lines)
