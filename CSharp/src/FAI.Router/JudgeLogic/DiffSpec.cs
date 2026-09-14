@@ -60,7 +60,11 @@ public class DiffSpec
             Number("Доля терминологии", requested.TermDensity, actual.TermDensity),
             Number("Формальность", requested.FormalityScore, actual.FormalityScore),
             Exact("Язык", requested.Language, actual.Language),
-            Exact("Ссылки на источники", requested.HasReferences, actual.HasReferences)
+            Exact("Ссылки на источники", requested.HasReferences, actual.HasReferences),
+            Exact("Область", requested.Domain, actual.Domain),
+            Exact("Язык программирования", requested.ProgrammingLanguage, actual.ProgrammingLanguage),
+            Exact("Область науки", requested.ScienceField, actual.ScienceField),
+            Exact("Тип задачи", requested.TaskKind, actual.TaskKind)
         ]);
 
     /// <summary>

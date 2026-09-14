@@ -15,9 +15,11 @@ def test_critic_sees_what_cosine_hides():
                             formality_score=0.1, language="ru", has_references=False)
     diff = Judge.criticize(requested, actual)
 
-    assert len(diff.deviations) == 16
+    # Пунктов стало 20: четыре пункта предмета задачи совпадают (оба «не задано») и провалов не
+    # добавляют, но входят в среднее
+    assert len(diff.deviations) == 20
     assert len(diff.mismatches) == 9
-    assert abs(diff.total_deviation - 0.465) < 1e-3
+    assert abs(diff.total_deviation - 0.465 * 16 / 20) < 1e-3
     assert diff.mismatches[0].field == "Стиль"
     assert "Таблицы: заказано 1, получено 0" in str(diff)
 

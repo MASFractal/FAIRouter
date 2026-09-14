@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fai_router.enums import Style
+from fai_router.enums import Domain, ProgrammingLanguage, ScienceField, Style, TaskKind
 from fai_router.llm import field_descriptions
 from fai_router.llm.client import OpenRouterClient
 from fai_router.settings import Settings
@@ -16,11 +16,21 @@ class SpecInputRecognizer:
         "Извлеки техническое задание из запроса пользователя к языковой модели.\n"
         "Опиши, каким должен быть ОТВЕТ на этот запрос, и верни параметры ответа в JSON по схеме.\n"
         "Явно заданные требования (объем, стиль, число разделов, таблицы, язык) бери как есть.\n"
-        "Неуказанное оценивай разумным ожиданием для такой задачи, а не нулем.\n\n"
+        "Неуказанное оценивай разумным ожиданием для такой задачи, а не нулем.\n"
+        "Отдельно выпиши смысловые пункты, которые ответ обязан раскрыть, и явные ограничения запроса.\n\n"
         "Запрос пользователя:\n----\n{text}\n----"
     )
 
-    # Имена полей схемы отображаются на поля Specifications таблицей ниже
+    # Имена полей схемы отображаются на поля Specifications таблицей ниже; поля-перечисления
+    # разбираются по своей таблице, незнакомое значение остается «не задано»
+    _ENUMS = {
+        "styleType": ("style_type", Style),
+        "domain": ("domain", Domain),
+        "programmingLanguage": ("programming_language", ProgrammingLanguage),
+        "scienceField": ("science_field", ScienceField),
+        "taskKind": ("task_kind", TaskKind),
+    }
+
     _KEYS = {
         "styleType": None,
         "symbolLength": "symbol_length",
@@ -38,6 +48,15 @@ class SpecInputRecognizer:
         "formalityScore": "formality_score",
         "language": "language",
         "hasReferences": "has_references",
+        "domain": None,
+        "programmingLanguage": None,
+        "scienceField": None,
+        "taskKind": None,
+        "expertLevel": "expert_level",
+        "difficulty": "difficulty",
+        "factualityDemand": "factuality_demand",
+        "requiredPoints": "required_points",
+        "constraints": "constraints",
     }
 
     SCHEMA = {
@@ -63,6 +82,24 @@ class SpecInputRecognizer:
                                "description": field_descriptions.FORMALITY},
             "language": {"type": "string", "description": "Язык ответа, код ISO 639-1"},
             "hasReferences": {"type": "boolean", "description": "Нужны ли ссылки на источники"},
+            "domain": {"type": "string", "enum": [item.value for item in Domain],
+                       "description": field_descriptions.DOMAIN},
+            "programmingLanguage": {"type": "string", "enum": [item.value for item in ProgrammingLanguage],
+                                    "description": field_descriptions.PROGRAMMING_LANGUAGE},
+            "scienceField": {"type": "string", "enum": [item.value for item in ScienceField],
+                             "description": field_descriptions.SCIENCE_FIELD},
+            "taskKind": {"type": "string", "enum": [item.value for item in TaskKind],
+                         "description": field_descriptions.TASK_KIND},
+            "expertLevel": {"type": "number", "minimum": 0, "maximum": 1,
+                            "description": field_descriptions.EXPERT_LEVEL},
+            "difficulty": {"type": "number", "minimum": 0, "maximum": 1,
+                           "description": field_descriptions.DIFFICULTY},
+            "factualityDemand": {"type": "number", "minimum": 0, "maximum": 1,
+                                 "description": field_descriptions.FACTUALITY_DEMAND},
+            "requiredPoints": {"type": "array", "items": {"type": "string"},
+                               "description": field_descriptions.REQUIRED_POINTS},
+            "constraints": {"type": "array", "items": {"type": "string"},
+                            "description": field_descriptions.CONSTRAINTS},
         },
         "required": list(_KEYS),
         "additionalProperties": False,
@@ -85,10 +122,11 @@ class SpecInputRecognizer:
             if key not in data:
                 continue
             if attribute is None:
+                name, enum_cls = self._ENUMS[key]
                 try:
-                    spec.style_type = Style(data[key])
+                    setattr(spec, name, enum_cls(data[key]))
                 except ValueError:
-                    spec.style_type = Style.OTHER
+                    pass
             else:
                 setattr(spec, attribute, data[key])
         return spec

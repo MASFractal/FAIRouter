@@ -17,4 +17,9 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
   </ItemGroup>
 
+  <!-- Профили задач по сериям рейтингов: один файл на обе версии библиотеки, см. BenchmarkPrior -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\Python\fai_router\data\benchmark_profiles.json" LogicalName="FAI.Router.benchmark_profiles.json" />
+  </ItemGroup>
+
 </Project>

@@ -19,12 +19,24 @@ public class Specifications
     private const double SentenceLengthScale = 40;
     private const double ReadabilityMax = 100;
 
+    /// <summary>
+    /// Языки, у которых на арене свой рейтинг, кодами ISO 639-1. Язык из списка светит своим
+    /// разрядом, любой другой известный язык светит последним, неизвестный не светит ничем.
+    /// </summary>
+    public static readonly string[] LanguageCodes = ["en", "ru", "zh", "fr", "de", "es", "ja", "ko", "pl"];
+
+    /// <summary>Разрядов под язык: по одному на язык арены и один на прочие.</summary>
+    public static int LanguageDim => LanguageCodes.Length + 1;
+
     // Доли приходят от модели, а она границы схемы соблюдает не всегда: DeepSeek возвращал
     // termDensity 4 и 80 при объявленных 0-1. Такое значение забивает норму вектора целиком,
     // поэтому границу держит сам тип, а не только схема ответа.
     private double _readabilityScore;
     private double _termDensity;
     private double _formalityScore;
+    private double _expertLevel;
+    private double _difficulty;
+    private double _factualityDemand;
 
     /// <summary>
     /// Распознаваемый тип стиля (стиль - представлен one-hot вектором)
@@ -130,6 +142,72 @@ public class Specifications
 
     #endregion
 
+    #region Предмет задачи
+
+    /// <summary>
+    /// Предметная область
+    /// </summary>
+    public Domain Domain { get; set; } = Domain.General;
+
+    /// <summary>
+    /// Язык программирования, если заказан или написан код
+    /// </summary>
+    public ProgrammingLanguage ProgrammingLanguage { get; set; } = ProgrammingLanguage.None;
+
+    /// <summary>
+    /// Область науки, если задача научная
+    /// </summary>
+    public ScienceField ScienceField { get; set; } = ScienceField.None;
+
+    /// <summary>
+    /// Тип задачи: что заказчик хочет получить на выходе (письмо, отчет, лендинг, код)
+    /// </summary>
+    public TaskKind TaskKind { get; set; } = TaskKind.None;
+
+    #endregion
+
+    #region Требования заказа вне вектора ответа
+
+    /// <summary>
+    /// Насколько запрос требует экспертной подготовки, 0-1 (категория арены Expert)
+    /// </summary>
+    public double ExpertLevel
+    {
+        get => _expertLevel;
+        set => _expertLevel = Math.Clamp(value, 0, 1);
+    }
+
+    /// <summary>
+    /// Трудность запроса: доля из семи признаков трудного запроса арены, 0-1 (Hard Prompts)
+    /// </summary>
+    public double Difficulty
+    {
+        get => _difficulty;
+        set => _difficulty = Math.Clamp(value, 0, 1);
+    }
+
+    /// <summary>
+    /// Насколько ответ держится на проверяемых фактах, 0-1: чем выше, тем дороже ошибка в факте
+    /// </summary>
+    public double FactualityDemand
+    {
+        get => _factualityDemand;
+        set => _factualityDemand = Math.Clamp(value, 0, 1);
+    }
+
+    /// <summary>
+    /// Смысловые пункты, которые ответ обязан раскрыть по сути: что сравнить, посчитать, решить.
+    /// По ним судья содержания проверяет полноту, а не число разделов.
+    /// </summary>
+    public List<string> RequiredPoints { get; set; } = [];
+
+    /// <summary>
+    /// Явные ограничения запроса, выполнение которых можно проверить (Instruction Following)
+    /// </summary>
+    public List<string> Constraints { get; set; } = [];
+
+    #endregion
+
     /// <summary>
     /// Вектор признаков
     /// </summary>
@@ -141,15 +219,29 @@ public class Specifications
     [JsonIgnore]
     public Vector FeaturesSpecificationVector => GetVector();
 
+    /// <summary>
+    /// Разряд языка в векторе: по списку <see cref="LanguageCodes"/>, последний для прочих,
+    /// минус единица для неизвестного
+    /// </summary>
+    /// <param name="code">Код языка ISO 639-1</param>
+    public static int LanguageSlot(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return -1;
+
+        int index = Array.IndexOf(LanguageCodes, code.Trim().ToLowerInvariant());
+
+        return index >= 0 ? index : LanguageCodes.Length;
+    }
+
     // Формирования вектора признаков
     private Vector GetVector()
     {
-        // Language и HasReferences в вектор не включены: строковый и булевый признаки
-        // требуют отдельного способа кодирования (сравнение языка, one-hot и т.п.),
-        // который пока не определен.
+        // Предмет задачи, язык и ссылки идут кодом «один из многих» и признаком 0/1: по ним
+        // роутер учит, кто в какой области силен, а масштабов у них нет, как и у стиля
         Vector featuresVector =
         [
-            .. Style2Vector(),
+            .. OneHot(StyleType),
             Scaled(SymbolLength, SymbolLengthScale),
             Scaled(WordLength, WordLengthScale),
             Scaled(ParagraphCount, CountScale),
@@ -162,7 +254,13 @@ public class Specifications
             Scaled(AvgSentenceLength, SentenceLengthScale),
             ReadabilityScore / ReadabilityMax,
             TermDensity,
-            FormalityScore
+            FormalityScore,
+            .. Subject(Domain),
+            .. Subject(ProgrammingLanguage),
+            .. Subject(ScienceField),
+            .. Subject(TaskKind),
+            .. LanguageVector(),
+            HasReferences ? 1 : 0
         ];
         return featuresVector;
     }
@@ -173,11 +271,36 @@ public class Specifications
     internal static double Scaled(double value, double scale) =>
         Math.Log(1 + Math.Max(0, value)) / Math.Log(1 + scale);
 
-    private Vector Style2Vector()
+    private Vector LanguageVector()
     {
-        int position = (int)StyleType;
-        Vector vector = new Vector(Enum.GetValues<Style>().Length);
-        vector[position] = 1;
+        Vector vector = new(LanguageDim);
+        int slot = LanguageSlot(Language);
+
+        if (slot >= 0)
+            vector[slot] = 1;
+
+        return vector;
+    }
+
+    // Код «один из многих» по перечислению: разряд по порядку значения
+    private static Vector OneHot<TEnum>(TEnum value) where TEnum : struct, Enum
+    {
+        Vector vector = new(Enum.GetValues<TEnum>().Length);
+        vector[Convert.ToInt32(value)] = 1;
+        return vector;
+    }
+
+    // Код предмета задачи: как «один из многих», но первое значение означает «не задано» и
+    // разряда не имеет. Задача без предмета получает те же координаты, что и раньше, и оценки
+    // судьи на ней не меняются
+    private static Vector Subject<TEnum>(TEnum value) where TEnum : struct, Enum
+    {
+        Vector vector = new(Enum.GetValues<TEnum>().Length - 1);
+        int index = Convert.ToInt32(value) - 1;
+
+        if (index >= 0)
+            vector[index] = 1;
+
         return vector;
     }
 }

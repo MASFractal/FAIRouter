@@ -28,7 +28,7 @@ public static class Env
     /// <param name="topk">Сколько лучших оставить</param>
     /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
     /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
-    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
+    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null, int turns = 1)
     {
         BaseRoutedElement[] candidates = [.. elements];
 
@@ -39,6 +39,7 @@ public static class Env
                 nameof(elements));
 
         InputFeatures features = await InputFeaturesService.GetFeaturesAsync(textPrompt).ConfigureAwait(false);
+        features.TurnCount = Math.Max(turns, 1);
 
         return Choose(features, candidates, topk, required, weights);
     }

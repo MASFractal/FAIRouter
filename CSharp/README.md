@@ -77,6 +77,10 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 | `RouterTrainer`, `JudgeTrainer` | контрастивное обучение и повтор оценки человека |
 | `QualityPrior` | начальные веса кандидата из заранее замеренного качества по типам задач |
 | `ModelCatalog` | цены, окна и возможности моделей из каталога OpenRouter |
+| `ContentJudge`, `ContentReview` | судья содержания: восемь критериев, проверяемые утверждения, замечания |
+| `ArenaLeaderboard`, `AnalysisLeaderboard` | разбор страниц арены и Artificial Analysis |
+| `BenchmarkSnapshot`, `ModelNames` | снимок рейтингов (JSON общий с Python) и сопоставление имен с каталогом |
+| `BenchmarkPrior` | начальные веса, скорость и поправка цены кандидата из рейтингов |
 | `SqliteTraceStore`, `SqliteWeightsStore` | журнал ходов и веса в одном файле |
 
 ## Использование
@@ -86,8 +90,9 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 ```csharp
 Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = "...", ModelName = "openai/gpt-4o-mini" });
 
-FaiRouter router = new(candidates, (candidate, prompt) => AskModel(candidate.Name, prompt), "fai-router.db");
-RouterAnswer answer = await router.AskAsync(prompt);
+FaiRouter router = new(candidates, (candidate, messages) => AskModel(candidate.Name, messages), "fai-router.db");
+RouterAnswer answer = await router.AskAsync(prompt);           // одна реплика
+RouterAnswer replied = await router.AskAsync(messages);        // диалог целиком, IEnumerable<LLMMessage>
 
 router.Feedback(answer.RoundId!.Value, score: 1.0);
 router.Train(epochs: 10);
@@ -110,10 +115,13 @@ Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions
 // Кандидаты берутся из каталога: руками задается только скорость, ее поставщик не публикует
 IReadOnlyList<ModelInfo> catalog = await ModelCatalog.FetchAsync();
 
+// Снимок рейтингов: кандидат стартует с прогноза по сериям арены и Artificial Analysis, а не со случайного вектора
+BenchmarkSnapshot benchmarks = await BenchmarkSnapshot.FetchAllAsync();
+
 BaseRoutedElement[] candidates =
 [
-    ModelCatalog.CreateElement(catalog.First(m => m.Id == "google/gemini-2.5-flash"), tokensPerSecond: 200),
-    ModelCatalog.CreateElement(catalog.First(m => m.Id == "anthropic/claude-haiku-4.5"), tokensPerSecond: 60)
+    ModelCatalog.CreateElement(catalog.First(m => m.Id == "google/gemini-2.5-flash"), tokensPerSecond: 200, benchmarks: benchmarks),
+    ModelCatalog.CreateElement(catalog.First(m => m.Id == "anthropic/claude-haiku-4.5"), tokensPerSecond: 60, benchmarks: benchmarks)
 ];
 
 // Задача с картинкой: неспособные отсеются до сравнения оценок
@@ -178,5 +186,13 @@ dotnet run --project docs/research/harness/LiveSession
   `Settings.LLM` он не задан, из-за чего поставщик отвергает запрос с пустым содержимым. Поэтому
   внутри библиотеки сообщения собираются явно.
 * **Размерность признаков вычисляется, а не задается константой.** Значение `Settings.FeaturesSpecDim`
-  считается из перечисления `Style` и числа метрик. Если добавили поле в `Specifications`, добавьте
-  и его масштаб, иначе оно попадет в вектор в сырых единицах.
+  считается из перечислений `Style`, `Domain`, `ProgrammingLanguage`, `ScienceField`, `TaskKind`,
+  числа метрик, языков и признака ссылок. Если добавили поле в `Specifications`, добавьте и его
+  масштаб, иначе оно попадет в вектор в сырых единицах. Смена размерности обесценивает сохраненные
+  веса: `SqliteWeightsStore.Load` на другой длине бросает исключение, и базу весов заводят заново.
+* **Имена моделей в каталоге, на арене и у Artificial Analysis различаются.** `ModelNames.Canonical`
+  срезает поставщика, вариант после двоеточия и хвосты усилия, режима, даты и контекста. Новый хвост
+  добавляется в `VariantTokens` и в `VARIANT_TOKENS` версии на Python: тесты обеих версий идут на
+  одних парах.
+* **Профили задач по сериям рейтингов лежат в одном файле** `Python/fai_router/data/benchmark_profiles.json`,
+  он встроен в сборку ресурсом. Правка профиля делается там, и обе версии видят ее сразу.

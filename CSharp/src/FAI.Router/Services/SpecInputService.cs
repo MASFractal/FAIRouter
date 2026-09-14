@@ -76,6 +76,9 @@ public class SpecOutputService : ISpecService
         specifications.StyleType = assessment.StyleType;
         specifications.TermDensity = assessment.TermDensity;
         specifications.FormalityScore = assessment.FormalityScore;
+        specifications.Domain = assessment.Domain;
+        specifications.ScienceField = assessment.ScienceField;
+        specifications.TaskKind = assessment.TaskKind;
 
         return specifications;
     }

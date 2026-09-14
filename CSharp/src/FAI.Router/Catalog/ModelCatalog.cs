@@ -3,6 +3,8 @@ using System.Text.Json;
 using FAI.Router.Enums;
 using FAI.Router.RoutedElements;
 using FAI.Router.Services;
+using FAI.Router.Training;
+using AI.DataStructs.Algebraic;
 
 namespace FAI.Router.Catalog;
 
@@ -19,6 +21,12 @@ public static class ModelCatalog
     /// Открытый список моделей OpenRouter, ключ для него не нужен
     /// </summary>
     public const string OpenRouterModels = "https://openrouter.ai/api/v1/models";
+
+    /// <summary>
+    /// Скорость модели, о которой ничего не известно, токенов в секунду: обычное значение для
+    /// нынешнего поколения моделей
+    /// </summary>
+    public const double DefaultTokensPerSecond = 50;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -53,20 +61,36 @@ public static class ModelCatalog
     /// <summary>
     /// Делает кандидата на исполнение из сведений каталога
     /// </summary>
+    /// <remarks>
+    /// Со снимком рейтингов кандидат стартует не со случайного вектора, а с прогноза по сериям арены
+    /// и Artificial Analysis (<see cref="BenchmarkPrior"/>). Оттуда же берутся скорость, если ее не
+    /// назвали, и поправка цены на рассуждения. Модели, которой в рейтингах нет, снимок не касается.
+    /// </remarks>
     /// <param name="model">Сведения о модели</param>
-    /// <param name="tokensPerSecond">Скорость, которой в каталоге нет</param>
-    public static BaseRoutedElement CreateElement(ModelInfo model, double tokensPerSecond = 50) =>
-        new()
+    /// <param name="tokensPerSecond">Скорость, которой в каталоге нет; не задана, тогда из рейтингов или 50</param>
+    /// <param name="benchmarks">Снимок рейтингов для начального вектора; пусто, значит вектор случайный</param>
+    public static BaseRoutedElement CreateElement(ModelInfo model, double? tokensPerSecond = null, BenchmarkSnapshot? benchmarks = null)
+    {
+        BaseRoutedElement element = new()
         {
             Name = model.Id,
             DPMTInp = model.DollarsPerMillionInput,
             DPMTOutp = model.DollarsPerMillionOutput,
-            TPS = tokensPerSecond,
+            TPS = tokensPerSecond ?? (benchmarks is null ? null : BenchmarkPrior.TokensPerSecond(benchmarks, model.Id)) ?? DefaultTokensPerSecond,
             Capabilities = model.Capabilities,
 
             // ContextLimit измеряется в символах ответа, а поставщик считает в токенах
             ContextLimit = (int)(model.MaxAnswerTokens * InputFeaturesService.EST_SYMBOL_PER_TOKEN)
         };
+
+        if (benchmarks is null)
+            return element;
+
+        element.IdealMatchVector = BenchmarkPrior.GetVector(benchmarks, model.Id) ?? element.IdealMatchVector;
+        element.CostRatio = BenchmarkPrior.CostRatio(benchmarks, model.Id) ?? element.CostRatio;
+
+        return element;
+    }
 
     /// <summary>
     /// Разбирает ответ каталога

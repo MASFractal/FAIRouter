@@ -63,4 +63,7 @@ class SpecOutputService:
         spec.style_type = assessment.style_type
         spec.term_density = assessment.term_density
         spec.formality_score = assessment.formality_score
+        spec.domain = assessment.domain
+        spec.science_field = assessment.science_field
+        spec.task_kind = assessment.task_kind
         return spec

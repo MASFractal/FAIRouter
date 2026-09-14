@@ -38,7 +38,8 @@ class SufficientTop:
 
 
 def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
-          required: Capability = Capability.NONE, weights: RouteWeights | None = None) -> Tracert:
+          required: Capability = Capability.NONE, weights: RouteWeights | None = None,
+          turns: int = 1) -> Tracert:
     """Полный ход роутинга: признаки запроса, соревнование кандидатов, трассировка.
     Баллы в трассировке проставляет судья, после того как победитель ответит.
     Веса этого выбора; пусто, тогда берутся общие из Settings."""
@@ -47,6 +48,7 @@ def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
     if not candidates:
         raise ValueError("Ни один кандидат не подходит: список пуст либо все отсеяны по возможностям.")
     features = InputFeaturesService.get_features_full(text_prompt)
+    features.turn_count = max(turns, 1)
     return choose(features, candidates, topk, required, weights=weights)
 
 

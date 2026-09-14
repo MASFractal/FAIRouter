@@ -1,0 +1,120 @@
+{
+ "about": "Профили задач по сериям рейтингов: какой задаче соответствует рейтинг модели в серии. Общий файл версий на Python и C#. Спецификация задачи собирается слиянием: base.spec, затем шаблон template, затем spec профиля; объемы и длина диалога берутся из профиля или из base.",
+ "base": {
+  "input_len": 500,
+  "len_answer": 1500,
+  "turn_count": 1,
+  "spec": {"style_type": "Other", "symbol_length": 4500, "word_length": 640, "paragraph_count": 6, "section_count": 3, "formality_score": 0.5, "term_density": 0.3}
+ },
+ "templates": {
+  "code": {"style_type": "Technical", "symbol_length": 3000, "word_length": 400, "code_block_count": 2, "term_density": 0.5, "formality_score": 0.7, "domain": "SoftwareIt", "programming_language": "Other"},
+  "science": {"style_type": "Scientific", "term_density": 0.7, "formality_score": 0.9, "domain": "Science"},
+  "math": {"style_type": "Scientific", "term_density": 0.7, "formality_score": 0.9, "domain": "Math", "science_field": "Mathematics", "formula_count": 3},
+  "work": {"style_type": "OfficialBusiness", "formality_score": 0.8, "term_density": 0.4},
+  "technical": {"style_type": "Technical", "term_density": 0.5, "formality_score": 0.7}
+ },
+ "profiles": {
+  "arena:text/overall": [{}],
+  "arena:text/expert": [{"spec": {"expert_level": 0.9, "difficulty": 0.6, "term_density": 0.6}}],
+  "arena:text/industry-software-and-it-services": [{"template": "technical", "spec": {"domain": "SoftwareIt", "science_field": "ComputerScience"}}],
+  "arena:text/industry-writing-and-literature-and-language": [{"spec": {"style_type": "Literary", "domain": "Writing", "term_density": 0.2}}],
+  "arena:text/industry-life-and-physical-and-social-science": [
+   {"template": "science", "spec": {"science_field": "Physics"}},
+   {"template": "science", "spec": {"science_field": "Chemistry"}},
+   {"template": "science", "spec": {"science_field": "Biology"}},
+   {"template": "science", "spec": {"science_field": "SocialSciences"}}
+  ],
+  "arena:text/industry-entertainment-and-sports-and-media": [{"spec": {"style_type": "Journalistic", "domain": "Entertainment", "term_density": 0.15}}],
+  "arena:text/industry-business-and-management-and-financial-operations": [{"template": "work", "spec": {"domain": "Business", "science_field": "Economics", "formality_score": 0.9}}],
+  "arena:text/industry-mathematical": [{"template": "math"}],
+  "arena:text/industry-legal-and-government": [{"template": "work", "spec": {"domain": "Legal", "formality_score": 0.95, "term_density": 0.5}}],
+  "arena:text/industry-medicine-and-healthcare": [{"template": "science", "spec": {"domain": "Medicine", "science_field": "Medicine"}}],
+  "arena:text/math": [{"template": "math"}],
+  "arena:text/instruction-following": [{"spec": {"constraints": ["ограничение 1", "ограничение 2", "ограничение 3", "ограничение 4", "ограничение 5"]}}],
+  "arena:text/multi-turn": [{"turn_count": 4}],
+  "arena:text/creative-writing": [{"spec": {"style_type": "Literary", "domain": "Writing", "task_kind": "Story", "term_density": 0.1}}],
+  "arena:text/coding": [{"template": "code"}],
+  "arena:text/hard-prompts": [{"spec": {"difficulty": 0.9, "expert_level": 0.5}}],
+  "arena:text/hard-prompts-english": [{"spec": {"difficulty": 0.9, "expert_level": 0.5, "language": "en"}}],
+  "arena:text/longer-query": [{"input_len": 4000}],
+  "arena:text/english": [{"spec": {"language": "en"}}],
+  "arena:text/non-english": [{"spec": {"language": "other"}}],
+  "arena:text/chinese": [{"spec": {"language": "zh"}}],
+  "arena:text/french": [{"spec": {"language": "fr"}}],
+  "arena:text/german": [{"spec": {"language": "de"}}],
+  "arena:text/spanish": [{"spec": {"language": "es"}}],
+  "arena:text/russian": [{"spec": {"language": "ru"}}],
+  "arena:text/japanese": [{"spec": {"language": "ja"}}],
+  "arena:text/korean": [{"spec": {"language": "ko"}}],
+  "arena:text/polish": [{"spec": {"language": "pl"}}],
+  "arena:code/frontend": [{"template": "code", "spec": {"symbol_length": 6000, "word_length": 800}}],
+  "arena:code/fullstack": [{"template": "code", "spec": {"symbol_length": 8000, "word_length": 1000}}],
+  "arena:code/html": [{"template": "code", "spec": {"programming_language": "Html"}}],
+  "arena:code/react": [{"template": "code", "spec": {"programming_language": "JavaScript"}}],
+  "arena:code/brand-marketing": [{"template": "code", "spec": {"style_type": "Advertising", "domain": "Marketing", "task_kind": "LandingPage", "programming_language": "Html", "term_density": 0.2}}],
+  "arena:search/overall": [{"template": "science", "spec": {"science_field": "Other", "has_references": true, "factuality_demand": 0.8}}],
+
+  "aa:intelligence": [{"spec": {"difficulty": 0.6}}],
+  "aa:non-hallucination": [{"spec": {"factuality_demand": 0.9}}],
+  "aa:ifbench": [{"spec": {"constraints": ["ограничение 1", "ограничение 2", "ограничение 3", "ограничение 4", "ограничение 5"]}}],
+  "aa:lcr": [{"input_len": 30000}],
+  "aa:tau2": [{"template": "work", "turn_count": 4, "spec": {"domain": "CustomerSupport", "task_kind": "CustomerReply", "constraints": ["ограничение 1", "ограничение 2", "ограничение 3"]}}],
+  "aa:hle": [{"template": "science", "spec": {"science_field": "Other", "expert_level": 1.0, "difficulty": 1.0}}],
+  "aa:gpqa": [
+   {"template": "science", "spec": {"science_field": "Physics", "expert_level": 0.9}},
+   {"template": "science", "spec": {"science_field": "Chemistry", "expert_level": 0.9}},
+   {"template": "science", "spec": {"science_field": "Biology", "expert_level": 0.9}}
+  ],
+  "aa:gdpval": [{"template": "work", "spec": {"domain": "Business", "task_kind": "AnalyticalReport", "expert_level": 0.6}}],
+  "aa:terminalbench-hard": [{"template": "code", "spec": {"difficulty": 0.8}}],
+  "aa:scicode": [{"template": "code", "spec": {"domain": "Science", "programming_language": "Python", "formula_count": 2}}],
+  "aa:harvey": [{"template": "work", "spec": {"domain": "Legal", "task_kind": "LegalAnalysis", "expert_level": 0.9, "factuality_demand": 0.9}}],
+  "aa:briefcase/analytical": [
+   {"template": "work", "spec": {"domain": "Business", "task_kind": "AnalyticalReport", "table_count": 2}},
+   {"template": "work", "spec": {"domain": "Business", "task_kind": "DataAnalysis", "table_count": 2}}
+  ],
+
+  "aa:index/finance-and-accounting": [{"template": "work", "spec": {"domain": "Finance", "task_kind": "FinancialReport", "expert_level": 0.7, "factuality_demand": 0.8, "table_count": 2}}],
+  "aa:index/strategy-and-ops": [
+   {"template": "work", "spec": {"domain": "Business", "task_kind": "BusinessPlan", "expert_level": 0.6}},
+   {"template": "work", "spec": {"domain": "Operations", "task_kind": "AnalyticalReport", "expert_level": 0.6}}
+  ],
+  "aa:index/legal": [{"template": "work", "spec": {"domain": "Legal", "task_kind": "LegalAnalysis", "expert_level": 0.8, "factuality_demand": 0.9}}],
+  "aa:index/healthcare-and-medical": [{"template": "science", "spec": {"domain": "Medicine", "science_field": "Medicine", "task_kind": "Advice", "expert_level": 0.8, "factuality_demand": 0.9}}],
+  "aa:index/engineering": [{"template": "technical", "spec": {"domain": "Engineering", "task_kind": "TechnicalDoc", "expert_level": 0.7, "formula_count": 2}}],
+  "aa:index/economics": [{"template": "science", "spec": {"science_field": "Economics", "task_kind": "AnalyticalReport", "expert_level": 0.7}}],
+
+  "aa:omniscience/business": [{"template": "work", "spec": {"domain": "Business", "task_kind": "AnalyticalReport", "factuality_demand": 0.9}}],
+  "aa:omniscience/health": [{"template": "science", "spec": {"domain": "Medicine", "science_field": "Medicine", "factuality_demand": 0.9}}],
+  "aa:omniscience/humanities-social-sciences": [{"template": "science", "spec": {"science_field": "Humanities", "factuality_demand": 0.9}}],
+  "aa:omniscience/law": [{"template": "work", "spec": {"domain": "Legal", "task_kind": "LegalAnalysis", "factuality_demand": 0.9}}],
+  "aa:omniscience/science-engineering-mathematics": [{"template": "science", "spec": {"science_field": "Physics", "factuality_demand": 0.9}}],
+  "aa:omniscience/software-engineering-swe": [{"template": "code", "spec": {"factuality_demand": 0.9}}],
+
+  "aa:swe-language/python": [{"template": "code", "spec": {"programming_language": "Python", "factuality_demand": 0.8}}],
+  "aa:swe-language/javascript": [{"template": "code", "spec": {"programming_language": "JavaScript", "factuality_demand": 0.8}}],
+  "aa:swe-language/typescript": [{"template": "code", "spec": {"programming_language": "TypeScript", "factuality_demand": 0.8}}],
+  "aa:swe-language/java": [{"template": "code", "spec": {"programming_language": "Java", "factuality_demand": 0.8}}],
+  "aa:swe-language/go": [{"template": "code", "spec": {"programming_language": "Go", "factuality_demand": 0.8}}],
+  "aa:swe-language/rust": [{"template": "code", "spec": {"programming_language": "Rust", "factuality_demand": 0.8}}],
+  "aa:swe-language/html": [{"template": "code", "spec": {"programming_language": "Html", "factuality_demand": 0.8}}],
+
+  "aa:automation/finance": [{"template": "work", "spec": {"domain": "Finance", "task_kind": "FinancialReport", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+  "aa:automation/hr": [{"template": "work", "spec": {"domain": "Hr", "task_kind": "JobDescription", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+  "aa:automation/marketing": [{"template": "work", "spec": {"domain": "Marketing", "task_kind": "EmailCampaign", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+  "aa:automation/operations": [{"template": "work", "spec": {"domain": "Operations", "task_kind": "InternalMemo", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+  "aa:automation/sales": [{"template": "work", "spec": {"domain": "Sales", "task_kind": "CommercialOffer", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+  "aa:automation/support": [{"template": "work", "spec": {"domain": "CustomerSupport", "task_kind": "CustomerReply", "constraints": ["правило 1", "правило 2", "правило 3"]}}],
+
+  "aa:gdp-pdf/hr": [{"template": "work", "spec": {"domain": "Hr", "task_kind": "Policy"}}],
+  "aa:gdp-pdf/legal": [{"template": "work", "spec": {"domain": "Legal", "task_kind": "LegalDocument"}}],
+  "aa:gdp-pdf/insurance": [{"template": "work", "spec": {"domain": "Finance", "task_kind": "Advice"}}],
+  "aa:gdp-pdf/healthcare": [{"template": "science", "spec": {"domain": "Medicine", "science_field": "Medicine", "task_kind": "Summary"}}],
+  "aa:gdp-pdf/engineering": [{"template": "technical", "spec": {"domain": "Engineering", "task_kind": "TechnicalDoc"}}],
+  "aa:gdp-pdf/real-estate": [{"template": "work", "spec": {"domain": "Business", "task_kind": "LegalDocument"}}],
+  "aa:gdp-pdf/construction": [{"template": "technical", "spec": {"domain": "Engineering", "task_kind": "Policy"}}],
+  "aa:gdp-pdf/stem-research": [{"template": "science", "spec": {"science_field": "Other", "task_kind": "ResearchReview"}}],
+  "aa:gdp-pdf/finance-investing": [{"template": "work", "spec": {"domain": "Finance", "task_kind": "FinancialReport"}}],
+  "aa:gdp-pdf/manufacturing-supply-chains": [{"template": "work", "spec": {"domain": "Operations", "task_kind": "AnalyticalReport"}}]
+ }
+}

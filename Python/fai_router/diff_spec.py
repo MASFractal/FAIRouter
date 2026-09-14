@@ -58,6 +58,10 @@ class DiffSpec:
             number("Формальность", requested.formality_score, actual.formality_score),
             exact("Язык", requested.language, actual.language),
             exact("Ссылки на источники", requested.has_references, actual.has_references),
+            exact("Область", requested.domain.value, actual.domain.value),
+            exact("Язык программирования", requested.programming_language.value, actual.programming_language.value),
+            exact("Область науки", requested.science_field.value, actual.science_field.value),
+            exact("Тип задачи", requested.task_kind.value, actual.task_kind.value),
         ])
 
     def __str__(self) -> str:

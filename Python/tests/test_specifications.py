@@ -17,7 +17,7 @@ def requested():
 
 
 def test_dimension_matches_settings():
-    assert len(requested().feature_vector()) == Settings.features_spec_dim() == 23
+    assert len(requested().feature_vector()) == Settings.features_spec_dim() == 104
 
 
 def test_scaling_lets_style_matter():
@@ -67,5 +67,5 @@ def test_real_prompt_keeps_specification_visible():
     features.input_specifications = requested()
     vector = features.feature_vector()
     head_share = float(vector[:Settings.FEATURES_DIM] @ vector[:Settings.FEATURES_DIM])
-    assert len(vector) == Settings.full_dim() == 25
+    assert len(vector) == Settings.full_dim() == 111
     assert head_share < 0.2

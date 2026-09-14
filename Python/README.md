@@ -31,7 +31,7 @@ pytest
 
 ```
 fai_router/
-├── enums.py            Style, FeedbackType, Capability
+├── enums.py            Style, Domain, ProgrammingLanguage, ScienceField, TaskKind, FeedbackType, Capability
 ├── settings.py         веса метрики, планка, температура, среднее по задачам, клиент модели
 ├── specifications.py   спецификация с масштабами и вектором признаков
 ├── diff_spec.py        разбор расхождений по пунктам (критик)
@@ -41,10 +41,15 @@ fai_router/
 ├── text_metrics.py     замер структуры текста без модели
 ├── services.py         извлечение задания и замер ответа
 ├── env.py              ход роутинга, сэмплирование, выбор с планкой, отсев, запасной вариант
-├── llm/                клиент OpenRouter, распознавание задания и стиля
-├── training/           обучение судьи и роутера, калибровка, начальные веса из замера
+├── llm/                клиент OpenRouter, распознавание задания и стиля, судья содержания
+├── training/           обучение судьи и роутера, калибровка, начальные веса из замера и из рейтингов
 ├── persistence/        веса и журнал ходов в SQLite
-└── catalog.py          цены и возможности моделей у поставщика
+├── catalog.py          цены и возможности моделей у поставщика
+├── content_review.py   оценка содержания: критерии, проверяемые утверждения, замечания
+├── benchmarks.py       снимок рейтингов и сопоставление имен (python -m fai_router.benchmarks --save)
+├── arena.py            разбор страниц арены
+├── analysis.py         разбор страниц Artificial Analysis
+└── data/               профили задач по сериям рейтингов, общие с версией на C#
 ```
 
 ## Фасад и сервер
@@ -80,16 +85,18 @@ python -m fai_router.server --models google/gemini-2.5-flash,openai/gpt-4.1-mini
 ```python
 from fai_router import Settings, Judge, env
 from fai_router.llm import OpenRouterClient
-from fai_router import catalog
+from fai_router import benchmarks, catalog
 from fai_router.services import SpecOutputService
 from fai_router.persistence import SqliteTraceStore
 
 Settings.llm = OpenRouterClient(api_key="...", model="openai/gpt-4o-mini")
 
 models = catalog.fetch()
+# Снимок рейтингов: кандидат стартует с прогноза по сериям арены и Artificial Analysis
+snapshot = benchmarks.fetch_all()
 candidates = [
-    catalog.create_element(next(m for m in models if m.id == "google/gemini-2.5-flash"), tokens_per_second=200),
-    catalog.create_element(next(m for m in models if m.id == "anthropic/claude-haiku-4.5"), tokens_per_second=60),
+    catalog.create_element(next(m for m in models if m.id == "google/gemini-2.5-flash"), tokens_per_second=200, benchmarks=snapshot),
+    catalog.create_element(next(m for m in models if m.id == "anthropic/claude-haiku-4.5"), tokens_per_second=60, benchmarks=snapshot),
 ]
 
 trace = env.route(prompt, candidates)
@@ -105,7 +112,7 @@ round_id = traces.append(trace, trace.requested_spec, actual, prompt)
 ```
 
 Тесты повторяют проверки, сделанные для версии на C#, с теми же числами: косинус 0,6408 между
-научным и детским текстом после нормировки, 9 провалов из 16 у критика, четыре совпадения из
+научным и детским текстом после нормировки, 9 провалов из 20 у критика, четыре совпадения из
 четырех у начальных весов из замера, разделение трех типов задач на 20 запусках. Калибровка
 планки совпадает с версией на C# до девятого знака.
 

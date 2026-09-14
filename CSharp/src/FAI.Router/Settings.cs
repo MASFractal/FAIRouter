@@ -94,6 +94,16 @@ public class Settings
     public static double TemperatureScale { get; set; } = 30.0;
 
     /// <summary>
+    /// Доля содержания в итоговой оценке ответа; форма получает остальное.
+    /// </summary>
+    /// <remarks>
+    /// Для бизнес-задачи главное это наполнение работы: таблица с выдуманными цифрами и отчет не
+    /// про ту аналитику проходят сверку формы на отлично. Поэтому содержание весит больше формы,
+    /// но форма не обнуляется: заказанный объем и структура тоже часть заказа.
+    /// </remarks>
+    public static double ContentWeight { get; set; } = 0.7;
+
+    /// <summary>
     /// Нынешние веса одним значением: их получает выбор, который своих не назвал.
     /// </summary>
     public static RouteWeights Current => new(WQ, WC, Wt, TemperatureScale);
@@ -158,10 +168,11 @@ public class Settings
     }
 
     /// <summary>
-    /// Число объемных признаков запроса: длина входа и ожидаемая длина ответа.
-    /// Третья координата раньше существовала, но никогда не заполнялась.
+    /// Число признаков задачи вне спецификации: длина входа, ожидаемая длина ответа, длина
+    /// диалога, число ограничений, экспертность, трудность и опора на факты
+    /// (<see cref="RotationTracking.InputFeatures"/>).
     /// </summary>
-    public static int FeaturesDim { get; set; } = 2;
+    public static int FeaturesDim { get; set; } = 7;
 
 
     /// <summary>
@@ -173,10 +184,15 @@ public class Settings
     private const int SpecNumericFeaturesCount = 13;
 
     /// <summary>
-    /// Размерность пространства признаков спецификации:
-    /// one-hot стиля (Style) + числовые метрики. Вычисляется, а не задается
-    /// константой, чтобы не расходиться с Specifications.FeaturesSpecificationVector
-    /// при добавлении новых стилей или метрик.
+    /// Размерность пространства признаков спецификации: коды «один из многих» стиля и предмета
+    /// задачи, числовые метрики, язык и признак ссылок. Вычисляется, а не задается константой,
+    /// чтобы не расходиться с Specifications.FeaturesSpecificationVector при добавлении стилей,
+    /// областей или метрик.
     /// </summary>
-    public static int FeaturesSpecDim => Enum.GetValues<Style>().Length + SpecNumericFeaturesCount;
+    public static int FeaturesSpecDim =>
+        Enum.GetValues<Style>().Length + SpecNumericFeaturesCount
+        // У перечислений предмета первое значение означает «не задано» и разряда не имеет
+        + Enum.GetValues<Domain>().Length - 1 + Enum.GetValues<ProgrammingLanguage>().Length - 1
+        + Enum.GetValues<ScienceField>().Length - 1 + Enum.GetValues<TaskKind>().Length - 1
+        + JudgeLogic.Specifications.LanguageDim + 1;
 }

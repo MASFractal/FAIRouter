@@ -25,6 +25,7 @@ public class LLMRecognitionSpecInput
         Опиши, каким должен быть ОТВЕТ на этот запрос, и верни параметры ответа в JSON по схеме.
         Явно заданные требования (объем, стиль, число разделов, таблицы, язык) бери как есть.
         Неуказанное оценивай разумным ожиданием для такой задачи, а не нулем.
+        Отдельно выпиши смысловые пункты, которые ответ обязан раскрыть, и явные ограничения запроса.
 
         Запрос пользователя:
         ----
@@ -79,7 +80,11 @@ public class LLMRecognitionSpecInput
     // список стилей берется из Style, чтобы не расходиться с перечислением
     private static string BuildSchema()
     {
-        string styles = string.Join(", ", Enum.GetNames<Style>().Select(name => $"\"{name}\""));
+        string styles = Names<Style>();
+        string domains = Names<Domain>();
+        string languages = Names<ProgrammingLanguage>();
+        string sciences = Names<ScienceField>();
+        string kinds = Names<TaskKind>();
 
         return $$"""
             {
@@ -100,16 +105,30 @@ public class LLMRecognitionSpecInput
                 "termDensity": { "type": "number", "minimum": 0, "maximum": 1, "description": "{{SpecFieldDescriptions.TermDensity}}" },
                 "formalityScore": { "type": "number", "minimum": 0, "maximum": 1, "description": "Формальность тона, 0-1" },
                 "language": { "type": "string", "description": "Язык ответа, код ISO 639-1" },
-                "hasReferences": { "type": "boolean", "description": "Нужны ли ссылки на источники" }
+                "hasReferences": { "type": "boolean", "description": "Нужны ли ссылки на источники" },
+                "domain": { "type": "string", "enum": [{{domains}}], "description": "{{SpecFieldDescriptions.Domain}}" },
+                "programmingLanguage": { "type": "string", "enum": [{{languages}}], "description": "{{SpecFieldDescriptions.ProgrammingLanguage}}" },
+                "scienceField": { "type": "string", "enum": [{{sciences}}], "description": "{{SpecFieldDescriptions.ScienceField}}" },
+                "taskKind": { "type": "string", "enum": [{{kinds}}], "description": "{{SpecFieldDescriptions.TaskKind}}" },
+                "expertLevel": { "type": "number", "minimum": 0, "maximum": 1, "description": "{{SpecFieldDescriptions.ExpertLevel}}" },
+                "difficulty": { "type": "number", "minimum": 0, "maximum": 1, "description": "{{SpecFieldDescriptions.Difficulty}}" },
+                "factualityDemand": { "type": "number", "minimum": 0, "maximum": 1, "description": "{{SpecFieldDescriptions.FactualityDemand}}" },
+                "requiredPoints": { "type": "array", "items": { "type": "string" }, "description": "{{SpecFieldDescriptions.RequiredPoints}}" },
+                "constraints": { "type": "array", "items": { "type": "string" }, "description": "{{SpecFieldDescriptions.Constraints}}" }
               },
               "required": [
                 "styleType", "symbolLength", "wordLength", "paragraphCount", "sectionCount",
                 "listItemCount", "tableCount", "codeBlockCount", "formulaCount", "headingDepth",
                 "avgSentenceLength", "readabilityScore", "termDensity", "formalityScore",
-                "language", "hasReferences"
+                "language", "hasReferences", "domain", "programmingLanguage", "scienceField", "taskKind",
+                "expertLevel", "difficulty", "factualityDemand", "requiredPoints", "constraints"
               ],
               "additionalProperties": false
             }
             """;
     }
+
+    // Список значений перечисления для схемы, в кавычках через запятую
+    private static string Names<TEnum>() where TEnum : struct, Enum =>
+        string.Join(", ", Enum.GetNames<TEnum>().Select(name => $"\"{name}\""));
 }

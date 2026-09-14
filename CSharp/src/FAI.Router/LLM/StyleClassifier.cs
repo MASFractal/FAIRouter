@@ -17,8 +17,9 @@ public class StyleClassifier
     /// Системный промпт оценщика
     /// </summary>
     private const string SystemPrompt =
-        "Ты оцениваешь стиль и лексику присланного текста. Определи стиль, долю терминологии " +
-        "и формальность тона, верни результат строго в виде JSON по заданной схеме, без пояснений.";
+        "Ты оцениваешь стиль, лексику и предмет присланного текста. Определи стиль, долю терминологии, " +
+        "формальность тона, предметную область, область науки и тип результата (что это за текст), верни результат " +
+        "строго в виде JSON по заданной схеме, без пояснений.";
 
     private readonly string _schemaJson = BuildSchema();
     private readonly LLMBase? _llm;
@@ -92,9 +93,12 @@ public class StyleClassifier
                     minimum = 0,
                     maximum = 1,
                     description = "Формальность тона, 0-1"
-                }
+                },
+                domain = new { type = "string", @enum = Enum.GetNames<Domain>(), description = SpecFieldDescriptions.Domain },
+                scienceField = new { type = "string", @enum = Enum.GetNames<ScienceField>(), description = SpecFieldDescriptions.ScienceField },
+                taskKind = new { type = "string", @enum = Enum.GetNames<TaskKind>(), description = SpecFieldDescriptions.TaskKind }
             },
-            required = new[] { "styleType", "termDensity", "formalityScore" },
+            required = new[] { "styleType", "termDensity", "formalityScore", "domain", "scienceField", "taskKind" },
             additionalProperties = false
         };
         return JsonSerializer.Serialize(schema);
@@ -107,7 +111,13 @@ public class StyleClassifier
 /// <param name="StyleType">Стиль текста</param>
 /// <param name="TermDensity">Доля терминологии, 0-1</param>
 /// <param name="FormalityScore">Формальность тона, 0-1</param>
+/// <param name="Domain">Предметная область</param>
+/// <param name="ScienceField">Область науки</param>
+/// <param name="TaskKind">Тип результата</param>
 public record StyleAssessment(
     Style StyleType = Style.Other,
     double TermDensity = 0,
-    double FormalityScore = 0);
+    double FormalityScore = 0,
+    Domain Domain = Domain.General,
+    ScienceField ScienceField = ScienceField.None,
+    TaskKind TaskKind = TaskKind.None);

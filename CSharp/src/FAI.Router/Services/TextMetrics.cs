@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using AI.DataPrepaire.NLPUtils.RegexpNLP;
+using FAI.Router.Enums;
 using FAI.Router.JudgeLogic;
 
 namespace FAI.Router.Services;
@@ -21,6 +22,29 @@ public static class TextMetrics
     private static readonly Regex ListItem = new(@"^\s*([-*+]|\d+[.)])\s+\S", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex TableSeparator = new(@"^\s*\|[\s|:-]*-[\s|:-]*\|\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex CodeFence = new(@"^\s*```", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex CodeFenceInfo = new(@"^\s*```[ \t]*([A-Za-z0-9#+.\-]+)", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Подписи ограждений кода по языкам. Подпись вне таблицы означает язык вне списка.
+    /// </summary>
+    private static readonly Dictionary<string, ProgrammingLanguage> FenceLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["python"] = ProgrammingLanguage.Python, ["py"] = ProgrammingLanguage.Python,
+        ["javascript"] = ProgrammingLanguage.JavaScript, ["js"] = ProgrammingLanguage.JavaScript,
+        ["jsx"] = ProgrammingLanguage.JavaScript, ["node"] = ProgrammingLanguage.JavaScript,
+        ["typescript"] = ProgrammingLanguage.TypeScript, ["ts"] = ProgrammingLanguage.TypeScript,
+        ["tsx"] = ProgrammingLanguage.TypeScript,
+        ["csharp"] = ProgrammingLanguage.CSharp, ["cs"] = ProgrammingLanguage.CSharp, ["c#"] = ProgrammingLanguage.CSharp,
+        ["java"] = ProgrammingLanguage.Java,
+        ["go"] = ProgrammingLanguage.Go, ["golang"] = ProgrammingLanguage.Go,
+        ["rust"] = ProgrammingLanguage.Rust, ["rs"] = ProgrammingLanguage.Rust,
+        ["cpp"] = ProgrammingLanguage.Cpp, ["c++"] = ProgrammingLanguage.Cpp, ["cc"] = ProgrammingLanguage.Cpp,
+        ["cxx"] = ProgrammingLanguage.Cpp, ["c"] = ProgrammingLanguage.Cpp, ["h"] = ProgrammingLanguage.Cpp,
+        ["sql"] = ProgrammingLanguage.Sql, ["postgresql"] = ProgrammingLanguage.Sql,
+        ["mysql"] = ProgrammingLanguage.Sql, ["psql"] = ProgrammingLanguage.Sql,
+        ["html"] = ProgrammingLanguage.Html, ["xml"] = ProgrammingLanguage.Html,
+        ["css"] = ProgrammingLanguage.Html, ["svg"] = ProgrammingLanguage.Html,
+    };
     private static readonly Regex Formula = new(@"\$\$[^$]+\$\$|\$[^$\n]+\$", RegexOptions.Compiled);
     private static readonly Regex Reference = new(@"\[[^\]]+\]\([^)]+\)|https?://", RegexOptions.Compiled);
     private static readonly Regex ParagraphBreak = new(@"\n\s*\n", RegexOptions.Compiled);
@@ -51,8 +75,29 @@ public static class TextMetrics
             AvgSentenceLength = sentences == 0 ? 0 : (double)words / sentences,
             ReadabilityScore = Readability(text, words, sentences),
             Language = DetectLanguage(text),
-            HasReferences = Reference.IsMatch(text)
+            HasReferences = Reference.IsMatch(text),
+            ProgrammingLanguage = ProgrammingLanguageOf(text)
         };
+    }
+
+    /// <summary>
+    /// Язык кода в тексте по подписям ограждений: самый частый из подписанных. Блоки есть, а
+    /// подписей нет, тогда язык вне списка; блоков нет, тогда кода не написано.
+    /// </summary>
+    /// <param name="text">Текст ответа</param>
+    public static ProgrammingLanguage ProgrammingLanguageOf(string text)
+    {
+        var tagged = CodeFenceInfo.Matches(text)
+            .Select(match => FenceLanguages.GetValueOrDefault(match.Groups[1].Value, ProgrammingLanguage.Other))
+            .GroupBy(language => language)
+            .OrderByDescending(group => group.Count())
+            .Select(group => group.Key)
+            .ToList();
+
+        if (tagged.Count > 0)
+            return tagged[0];
+
+        return CodeFence.IsMatch(text) ? ProgrammingLanguage.Other : ProgrammingLanguage.None;
     }
 
     // Абзацы разделены пустой строкой

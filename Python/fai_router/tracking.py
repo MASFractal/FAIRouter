@@ -21,18 +21,31 @@ class InputFeatures:
     # запросе, и все координаты спецификации весили ноль: роутер не видел типа задачи
     INPUT_SCALE = 2000.0
     ANSWER_SCALE = 7000.0
+    TURN_SCALE = 10.0
+    CONSTRAINT_SCALE = 10.0
 
     def __init__(self, input_len: float = 0.0, len_answer: float = 0.0,
-                 input_specifications: Specifications | None = None):
+                 input_specifications: Specifications | None = None, turn_count: int = 1):
         self.input_len = input_len
         self.len_answer = len_answer
         self.input_specifications = Specifications() if input_specifications is None else input_specifications
+        # Число реплик пользователя в диалоге. Одна реплика означает обычный запрос и в вектор
+        # ничего не добавляет; категория арены Multi-Turn различает модели по длинным диалогам
+        self.turn_count = turn_count
 
     def feature_vector(self) -> np.ndarray:
-        """Объемные признаки и вектор спецификации, приведенные к единичной длине."""
+        """Признаки задачи и вектор спецификации, приведенные к единичной длине. Свойства задачи
+        (трудность, экспертность, ограничения, опора на факты, длина диалога) входят здесь, а не в
+        вектор спецификации: у готового ответа их нет, и судья формы видел бы в них расхождение."""
+        spec = self.input_specifications
         head = np.array([
             Specifications.scaled(self.input_len, self.INPUT_SCALE),
             Specifications.scaled(self.len_answer, self.ANSWER_SCALE),
+            Specifications.scaled(self.turn_count - 1, self.TURN_SCALE),
+            Specifications.scaled(len(spec.constraints), self.CONSTRAINT_SCALE),
+            spec.expert_level,
+            spec.difficulty,
+            spec.factuality_demand,
         ])
         vector = np.concatenate([head, self.input_specifications.feature_vector()])
         norm = np.linalg.norm(vector)

@@ -15,5 +15,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["fai_router*"]
 
+# Профили задач по сериям рейтингов; тот же файл встроен ресурсом в сборку на C#
+[tool.setuptools.package-data]
+fai_router = ["data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

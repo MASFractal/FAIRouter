@@ -53,4 +53,31 @@ public class Judge
     /// <param name="actualSpec">Фактические параметры ответа</param>
     public static DiffSpec Criticize(Specifications inputSpec, Specifications actualSpec) =>
         DiffSpec.Compare(inputSpec, actualSpec);
+
+    /// <summary>
+    /// Итоговая оценка ответа: содержание и форма с долями из <see cref="Settings.ContentWeight"/>.
+    /// Форма здесь это доля выполненных пунктов критика: число объяснимое и не зависящее от
+    /// обучаемой матрицы. Без оценки содержания итог равен форме.
+    /// </summary>
+    /// <param name="form">Разбор формы</param>
+    /// <param name="content">Оценка содержания; пусто, если ее не делали</param>
+    public static double Assess(DiffSpec form, ContentReview? content)
+    {
+        double formScore = 1 - form.TotalDeviation;
+
+        return content is null ? formScore : Settings.ContentWeight * content.Score + (1 - Settings.ContentWeight) * formScore;
+    }
+
+    /// <summary>
+    /// Отчет по обеим осям: сначала содержание с замечаниями, потом проваленные пункты формы
+    /// </summary>
+    /// <param name="form">Разбор формы</param>
+    /// <param name="content">Оценка содержания; пусто, если ее не делали</param>
+    public static string Report(DiffSpec form, ContentReview? content)
+    {
+        string formPart = $"Форма {(1 - form.TotalDeviation).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}"
+            + (form.Mismatches.Any() ? Environment.NewLine + form : "");
+
+        return content is null ? formPart : content + Environment.NewLine + formPart;
+    }
 }

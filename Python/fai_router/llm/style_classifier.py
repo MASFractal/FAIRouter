@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from fai_router.enums import Style
+from fai_router.enums import Domain, ScienceField, Style, TaskKind
 from fai_router.llm import field_descriptions
 from fai_router.llm.client import OpenRouterClient
 from fai_router.settings import Settings
@@ -16,6 +16,9 @@ class StyleAssessment:
     style_type: Style = Style.OTHER
     term_density: float = 0.0
     formality_score: float = 0.0
+    domain: Domain = Domain.GENERAL
+    science_field: ScienceField = ScienceField.NONE
+    task_kind: TaskKind = TaskKind.NONE
 
 
 class StyleClassifier:
@@ -23,8 +26,9 @@ class StyleClassifier:
     считается по разметке."""
 
     SYSTEM_PROMPT = (
-        "Ты оцениваешь стиль и лексику присланного текста. Определи стиль, долю терминологии "
-        "и формальность тона, верни результат строго в виде JSON по заданной схеме, без пояснений."
+        "Ты оцениваешь стиль, лексику и предмет присланного текста. Определи стиль, долю терминологии, "
+        "формальность тона, предметную область, область науки и тип результата (что это за текст), верни результат "
+        "строго в виде JSON по заданной схеме, без пояснений."
     )
 
     SCHEMA = {
@@ -36,8 +40,14 @@ class StyleClassifier:
                             "description": field_descriptions.TERM_DENSITY},
             "formalityScore": {"type": "number", "minimum": 0, "maximum": 1,
                                "description": field_descriptions.FORMALITY},
+            "domain": {"type": "string", "enum": [item.value for item in Domain],
+                       "description": field_descriptions.DOMAIN},
+            "scienceField": {"type": "string", "enum": [item.value for item in ScienceField],
+                             "description": field_descriptions.SCIENCE_FIELD},
+            "taskKind": {"type": "string", "enum": [item.value for item in TaskKind],
+                         "description": field_descriptions.TASK_KIND},
         },
-        "required": ["styleType", "termDensity", "formalityScore"],
+        "required": ["styleType", "termDensity", "formalityScore", "domain", "scienceField", "taskKind"],
         "additionalProperties": False,
     }
 
@@ -55,14 +65,18 @@ class StyleClassifier:
         )
         data = json.loads(raw)
         return StyleAssessment(
-            style_type=_style_of(data.get("styleType")),
+            style_type=_enum_of(Style, data.get("styleType"), Style.OTHER),
             term_density=float(data.get("termDensity", 0.0)),
             formality_score=float(data.get("formalityScore", 0.0)),
+            domain=_enum_of(Domain, data.get("domain"), Domain.GENERAL),
+            science_field=_enum_of(ScienceField, data.get("scienceField"), ScienceField.NONE),
+            task_kind=_enum_of(TaskKind, data.get("taskKind"), TaskKind.NONE),
         )
 
 
-def _style_of(value: str | None) -> Style:
+def _enum_of(enum_cls, value, fallback):
+    """Значение перечисления по ответу модели; незнакомое значение дает запасное."""
     try:
-        return Style(value)
+        return enum_cls(value)
     except ValueError:
-        return Style.OTHER
+        return fallback

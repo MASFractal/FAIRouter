@@ -6,11 +6,14 @@ from __future__ import annotations
 import json
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from fai_router.enums import Capability
 from fai_router.routed_element import RoutedElement
 from fai_router.services import InputFeaturesService
+
+if TYPE_CHECKING:
+    from fai_router.benchmarks import BenchmarkSnapshot
 
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 
@@ -27,6 +30,10 @@ class ModelInfo:
     intelligence_index: float
     coding_index: float
     agentic_index: float
+
+
+# Скорость модели, о которой ничего не известно, токенов в секунду
+DEFAULT_TOKENS_PER_SECOND = 50.0
 
 
 def fetch(timeout: float = 60.0) -> list[ModelInfo]:
@@ -46,18 +53,36 @@ def save(path: str, models: Iterable[ModelInfo]) -> None:
         json.dump([_to_dict(model) for model in models], file, ensure_ascii=False, indent=2)
 
 
-def create_element(model: ModelInfo, tokens_per_second: float = 50.0) -> RoutedElement:
+def create_element(model: ModelInfo, tokens_per_second: float | None = None,
+                   benchmarks: BenchmarkSnapshot | None = None) -> RoutedElement:
     """Кандидат на исполнение из сведений каталога. Предел ответа переводится из токенов в
-    символы, потому что context_limit кандидата измеряется в символах."""
-    return RoutedElement(
+    символы, потому что context_limit кандидата измеряется в символах. Со снимком рейтингов
+    кандидат стартует не со случайного вектора, а с прогноза по сериям арены и Artificial Analysis
+    (benchmark_prior); оттуда же берутся скорость, если ее не назвали, и поправка цены на
+    рассуждения. Модели, которой в рейтингах нет, снимок не касается."""
+    # Импорт здесь, а не наверху: профили рейтингов подгружает только тот, кто их просит
+    from fai_router.training import benchmark_prior
+
+    speed = tokens_per_second
+    if speed is None and benchmarks is not None:
+        speed = benchmark_prior.tokens_per_second(benchmarks, model.id)
+    element = RoutedElement(
         name=model.id,
-        tps=tokens_per_second,
+        tps=DEFAULT_TOKENS_PER_SECOND if speed is None else speed,
         dpmt_inp=model.dollars_per_million_input,
         dpmt_outp=model.dollars_per_million_output,
         capabilities=model.capabilities,
         context_limit=int(model.max_answer_tokens * InputFeaturesService.EST_SYMBOL_PER_TOKEN),
     )
-
+    if benchmarks is None:
+        return element
+    prior = benchmark_prior.vector(benchmarks, model.id)
+    if prior is not None:
+        element.ideal_match_vector = prior
+    ratio = benchmark_prior.cost_ratio(benchmarks, model.id)
+    if ratio is not None:
+        element.cost_ratio = ratio
+    return element
 
 def parse(text: str) -> list[ModelInfo]:
     models = []

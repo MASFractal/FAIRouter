@@ -1,4 +1,5 @@
 from fai_router import text_metrics
+from fai_router.enums import ProgrammingLanguage
 
 ANSWER = """# Отчет по проекту
 
@@ -37,7 +38,8 @@ def test_structure_is_measured_like_csharp():
     assert spec.paragraph_count == 3
     assert spec.language == "ru"
     assert spec.has_references
-    assert len(spec.feature_vector()) == 23
+    assert spec.programming_language == ProgrammingLanguage.CSHARP
+    assert len(spec.feature_vector()) == 104
 
 
 def test_abbreviations_do_not_split_sentences():

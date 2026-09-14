@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from fai_router import env
+from fai_router.content_review import ContentReview
 from fai_router.diff_spec import DiffSpec
 from fai_router.enums import Capability, FeedbackType
 from fai_router.judge import Judge
 from fai_router.llm.client import OpenRouterClient
+from fai_router.llm.content_judge import ContentJudge
 from fai_router.persistence import SqliteTraceStore, SqliteWeightsStore
 from fai_router.routed_element import RoutedElement
 from fai_router.services import SpecOutputService
@@ -49,6 +51,9 @@ class RouterAnswer:
     round_id: int | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Оценка содержания и итоговая оценка по содержанию и форме; None, если замер отключен
+    content: ContentReview | None = None
+    assessment: float | None = None
 
 
 class FaiRouter:
@@ -62,12 +67,15 @@ class FaiRouter:
         topk: int = 5,
         measure: bool = True,
         llm: OpenRouterClient | None = None,
+        content_judge: ContentJudge | None = None,
     ):
         self.candidates = list(candidates)
         self._execute = execute
         self.topk = topk
-        # Замер ответа стоит одного обращения к модели на ход; его можно отключить
+        # Оценка ответа по форме и содержанию стоит двух обращений к модели на ход; ее можно отключить
         self.measure = measure
+        # Свой судья содержания нужен, например, для проверки фактов по вебу
+        self.content_judge = content_judge or ContentJudge()
         self.judge = Judge()
         self.traces = SqliteTraceStore(database_path) if database_path else None
         self.weights = SqliteWeightsStore(database_path) if database_path else None
@@ -99,7 +107,7 @@ class FaiRouter:
         for model_id in model_ids:
             if model_id not in known:
                 raise ValueError(f"Модели {model_id} нет в каталоге OpenRouter.")
-            candidates.append(catalog.create_element(known[model_id], speeds.get(model_id, 50.0)))
+            candidates.append(catalog.create_element(known[model_id], speeds.get(model_id)))
 
         clients: dict[str, OpenRouterClient] = {}
 
@@ -122,7 +130,8 @@ class FaiRouter:
         if not prompt.strip():
             raise ValueError("В диалоге нет сообщения пользователя, задачу распознать не из чего.")
 
-        trace = env.route(prompt, self.candidates, self.topk, required)
+        turns = sum(1 for m in messages if m.get("role") == "user")
+        trace = env.route(prompt, self.candidates, self.topk, required, turns=turns)
         completion = env.execute(trace, lambda candidate: self._execute(candidate, messages))
         if isinstance(completion, str):
             completion = Completion(completion)
@@ -133,15 +142,16 @@ class FaiRouter:
 
         if self.measure and completion.text.strip():
             answer.actual = self._measurer.get_specifications(completion.text)
+            answer.content = self.content_judge.review(prompt, trace.requested_spec, completion.text)
             answer.score = self.judge.rate(trace, trace.requested_spec, answer.actual)
             answer.critic = Judge.criticize(trace.requested_spec, answer.actual)
+            answer.assessment = Judge.assess(answer.critic, answer.content)
 
         if self.traces is not None:
             answer.round_id = self.traces.append(trace, trace.requested_spec, answer.actual, prompt)
-            # Отзыв критика ставится сразу; человеческий, если придет, его перезапишет
-            if answer.critic is not None:
-                self.traces.set_feedback(answer.round_id,
-                                         Feedback(FeedbackType.AUTO, 1 - answer.critic.total_deviation))
+            # Автоотзыв это итоговая оценка по содержанию и форме; человеческий его перезапишет
+            if answer.assessment is not None:
+                self.traces.set_feedback(answer.round_id, Feedback(FeedbackType.AUTO, answer.assessment))
         return answer
 
     def feedback(self, round_id: int, score: float, human: bool = True) -> None:

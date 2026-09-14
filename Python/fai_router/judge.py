@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from fai_router.content_review import ContentReview
 from fai_router.diff_spec import DiffSpec
 from fai_router.settings import Settings
 from fai_router.specifications import Specifications
@@ -36,3 +37,19 @@ class Judge:
     def criticize(input_spec: Specifications, actual_spec: Specifications) -> DiffSpec:
         """Режим критика: расхождения между заданием и фактом по каждому пункту."""
         return DiffSpec.compare(input_spec, actual_spec)
+
+    @staticmethod
+    def assess(form: DiffSpec, content: ContentReview | None) -> float:
+        """Итоговая оценка ответа: содержание и форма с долями из Settings.content_weight. Форма
+        здесь это доля выполненных пунктов критика: число объяснимое и не зависящее от обучаемой
+        матрицы. Без оценки содержания итог равен форме."""
+        form_score = 1.0 - form.total_deviation
+        if content is None:
+            return form_score
+        return Settings.content_weight * content.score + (1.0 - Settings.content_weight) * form_score
+
+    @staticmethod
+    def report(form: DiffSpec, content: ContentReview | None) -> str:
+        """Отчет по обеим осям: сначала содержание с замечаниями, потом проваленные пункты формы."""
+        form_part = f"Форма {1.0 - form.total_deviation:.2f}" + (f"\n{form}" if form.mismatches else "")
+        return form_part if content is None else f"{content}\n{form_part}"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from fai_router.enums import ProgrammingLanguage
 from fai_router.specifications import Specifications
 
 # Гласные русского и английского алфавитов, слог примерно равен гласной.
@@ -15,6 +16,26 @@ _HEADING = re.compile(r"^(#{1,6})\s+\S", re.MULTILINE)
 _LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s+\S", re.MULTILINE)
 _TABLE_SEPARATOR = re.compile(r"^\s*\|[\s|:-]*-[\s|:-]*\|\s*$", re.MULTILINE)
 _CODE_FENCE = re.compile(r"^\s*```", re.MULTILINE)
+_CODE_FENCE_INFO = re.compile(r"^\s*```[ \t]*([A-Za-z0-9#+.\-]+)", re.MULTILINE)
+
+# Подписи ограждений кода по языкам; подпись вне таблицы означает язык вне списка
+_FENCE_LANGUAGES = {
+    "python": ProgrammingLanguage.PYTHON, "py": ProgrammingLanguage.PYTHON,
+    "javascript": ProgrammingLanguage.JAVASCRIPT, "js": ProgrammingLanguage.JAVASCRIPT,
+    "jsx": ProgrammingLanguage.JAVASCRIPT, "node": ProgrammingLanguage.JAVASCRIPT,
+    "typescript": ProgrammingLanguage.TYPESCRIPT, "ts": ProgrammingLanguage.TYPESCRIPT,
+    "tsx": ProgrammingLanguage.TYPESCRIPT,
+    "csharp": ProgrammingLanguage.CSHARP, "cs": ProgrammingLanguage.CSHARP, "c#": ProgrammingLanguage.CSHARP,
+    "java": ProgrammingLanguage.JAVA,
+    "go": ProgrammingLanguage.GO, "golang": ProgrammingLanguage.GO,
+    "rust": ProgrammingLanguage.RUST, "rs": ProgrammingLanguage.RUST,
+    "cpp": ProgrammingLanguage.CPP, "c++": ProgrammingLanguage.CPP, "cc": ProgrammingLanguage.CPP,
+    "cxx": ProgrammingLanguage.CPP, "c": ProgrammingLanguage.CPP, "h": ProgrammingLanguage.CPP,
+    "sql": ProgrammingLanguage.SQL, "postgresql": ProgrammingLanguage.SQL,
+    "mysql": ProgrammingLanguage.SQL, "psql": ProgrammingLanguage.SQL,
+    "html": ProgrammingLanguage.HTML, "xml": ProgrammingLanguage.HTML,
+    "css": ProgrammingLanguage.HTML, "svg": ProgrammingLanguage.HTML,
+}
 _FORMULA = re.compile(r"\$\$[^$]+\$\$|\$[^$\n]+\$")
 _REFERENCE = re.compile(r"\[[^\]]+\]\([^)]+\)|https?://")
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
@@ -58,7 +79,18 @@ def measure(text: str) -> Specifications:
         readability_score=_readability(text, words, sentences),
         language=_detect_language(text),
         has_references=bool(_REFERENCE.search(text)),
+        programming_language=programming_language_of(text),
     )
+
+
+def programming_language_of(text: str) -> ProgrammingLanguage:
+    """Язык кода в тексте по подписям ограждений: самый частый из подписанных. Блоки есть, а
+    подписей нет, тогда язык вне списка; блоков нет, тогда кода не написано."""
+    tagged = [_FENCE_LANGUAGES.get(tag.lower(), ProgrammingLanguage.OTHER)
+              for tag in _CODE_FENCE_INFO.findall(text)]
+    if tagged:
+        return max(set(tagged), key=lambda language: (tagged.count(language), -language.index))
+    return ProgrammingLanguage.OTHER if _CODE_FENCE.search(text) else ProgrammingLanguage.NONE
 
 
 def _count_paragraphs(text: str) -> int:

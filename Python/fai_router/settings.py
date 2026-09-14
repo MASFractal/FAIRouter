@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from fai_router.enums import Style
+from fai_router.enums import Domain, ProgrammingLanguage, ScienceField, Style, TaskKind
 
 if TYPE_CHECKING:
     from fai_router.training.calibration import Calibration
@@ -79,6 +79,11 @@ class Settings:
     # (раньше при C=1 было только 4 из 20).
     temperature_scale: float = 30.0
 
+    # Доля содержания в итоговой оценке ответа; форма получает остальное. Для бизнес-задачи главное
+    # это наполнение работы: таблица с выдуманными цифрами проходит сверку формы на отлично. Форма
+    # не обнуляется: заказанный объем и структура тоже часть заказа
+    content_weight: float = 0.7
+
     # Дисперсия, приписываемая кандидату, о котором нечего знать: наибольшая для отрезка 0..1,
     # поэтому новичок получает самую высокую температуру и участвует в выборе чаще
     UNKNOWN_VARIANCE: float = 0.25
@@ -91,8 +96,9 @@ class Settings:
     # Клиент модели для распознавания задачи и разбора ответа
     llm = None
 
-    # Число объемных признаков запроса: длина входа и ожидаемая длина ответа
-    FEATURES_DIM: int = 2
+    # Число признаков задачи вне спецификации: длина входа, ожидаемая длина ответа, длина
+    # диалога, число ограничений, экспертность, трудность и опора на факты (InputFeatures)
+    FEATURES_DIM: int = 7
 
     # Числовые метрики спецификации кроме кода стиля: symbol_length, word_length,
     # paragraph_count, section_count, list_item_count, table_count, code_block_count,
@@ -113,7 +119,13 @@ class Settings:
         мог выучить разный наклон по объему для каждого стиля: 10 стилей * 2 объемных
         координаты, размерность 43 вместо 23. Идея не подтвердилась измерением, см.
         docs/research/exploration.md, «интерактивные признаки»."""
-        return len(Style) + cls.SPEC_NUMERIC_FEATURES
+        from fai_router.specifications import Specifications
+
+        # У перечислений предмета первое значение означает «не задано» и разряда не имеет
+        return (len(Style) + cls.SPEC_NUMERIC_FEATURES
+                + (len(Domain) - 1) + (len(ProgrammingLanguage) - 1)
+                + (len(ScienceField) - 1) + (len(TaskKind) - 1)
+                + Specifications.language_dim() + 1)
 
     @classmethod
     def full_dim(cls) -> int:
