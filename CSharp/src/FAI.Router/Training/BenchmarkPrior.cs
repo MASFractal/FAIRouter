@@ -39,6 +39,9 @@ public static class BenchmarkPrior
 
     private static readonly JsonObject Source = LoadSource();
 
+    // Вектор Uniform для единицы; запись целиком, чтобы соседний поток видел либо старую пару, либо новую
+    private static UniformUnit? _uniform;
+
     /// <summary>Профили по ключам серий, в порядке файла</summary>
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<InputFeatures>> Profiles = BuildProfiles();
 
@@ -69,6 +72,31 @@ public static class BenchmarkPrior
         IReadOnlyList<(Vector Task, double Quality)> pairs = Measurements(snapshot, openRouterId);
 
         return pairs.Count == 0 ? null : QualityPrior.FromMeasurements(pairs);
+    }
+
+    /// <summary>
+    /// Начальный вектор модели без рейтингов: качество <paramref name="quality"/> одинаково во всех сериях
+    /// </summary>
+    /// <remarks>
+    /// Строится той же подгонкой по тем же профилям задач, что <see cref="GetVector"/>, и потому лежит на
+    /// одной шкале с моделями из рейтингов. Вектор по одной опорной задаче сжимается подгонкой иначе, чем
+    /// вектор по полусотне точек, и безрейтинговая модель со средним баллом обгоняла сильнейшие рейтинговые.
+    /// <para>
+    /// Подгонка линейна по качеству, поэтому считается один раз для единицы и умножается: безрейтинговых
+    /// моделей в каталоге сотни, и подгонка на каждую задерживала бы первый ход после обновления рейтингов.
+    /// Запомненный вектор привязан к среднему задач (<see cref="Settings.TaskMean"/>): сменилось оно — считаем заново.
+    /// </para>
+    /// </remarks>
+    /// <param name="quality">Качество от 0 до 1, например балл возможностей каталога</param>
+    public static Vector Uniform(double quality)
+    {
+        UniformUnit? unit = _uniform;
+
+        if (unit is null || !ReferenceEquals(unit.Mean, Settings.TaskMean))
+            _uniform = unit = new UniformUnit(Settings.TaskMean,
+                QualityPrior.FromMeasurements([.. Profiles.Values.SelectMany(tasks => tasks).Select(task => (task.FeatureVector, 1.0))]));
+
+        return unit.Vector * quality;
     }
 
     /// <summary>Скорость модели по замеру Artificial Analysis, токенов в секунду; нет замера, значит <c>null</c></summary>
@@ -141,4 +169,6 @@ public static class BenchmarkPrior
 
         return profiles;
     }
+
+    private sealed record UniformUnit(Vector? Mean, Vector Vector);
 }

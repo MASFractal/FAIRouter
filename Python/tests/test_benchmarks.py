@@ -193,13 +193,13 @@ def test_prior_orders_models_by_category():
     assert float(code @ gemini) < float(literary @ gemini)
     assert benchmark_prior.vector(shot, "meta/llama-9") is None
 
-    # Числа общие с C#-тестом. Прогноз чуть ниже качества в серии (0.9153): добавка к диагонали
-    # системы Грама укорачивает вектор
-    assert float(code @ claude) == pytest.approx(0.9140351676590679, abs=1e-9)
-    assert float(literary @ claude) == pytest.approx(0.0006869535025922358, abs=1e-9)
-    assert float(np.linalg.norm(claude)) == pytest.approx(1.082441231294556, abs=1e-9)
-    assert float(code @ gemini) == pytest.approx(0.41527892909152475, abs=1e-9)
-    assert float(literary @ gemini) == pytest.approx(0.9989105090218988, abs=1e-9)
+    # Числа общие с C#-тестом. Прогноз ниже качества в серии (0.9153): добавка к диагонали
+    # системы Грама (доля 0,3 средней диагонали, DEFAULT_RIDGE) укорачивает вектор
+    assert float(code @ claude) == pytest.approx(0.660785496860506, abs=1e-9)
+    assert float(literary @ claude) == pytest.approx(0.10498806584289641, abs=1e-9)
+    assert float(np.linalg.norm(claude)) == pytest.approx(0.7238061464221811, abs=1e-9)
+    assert float(code @ gemini) == pytest.approx(0.41437720973970227, abs=1e-9)
+    assert float(literary @ gemini) == pytest.approx(0.76953302847159, abs=1e-9)
 
 
 def test_speed_and_cost_priors():

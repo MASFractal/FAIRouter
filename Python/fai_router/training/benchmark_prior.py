@@ -84,6 +84,14 @@ def vector(snapshot: "BenchmarkSnapshot", openrouter_id: str) -> np.ndarray | No
     return from_measurements(pairs) if pairs else None
 
 
+def uniform(quality: float) -> np.ndarray:
+    """Начальный вектор модели без рейтингов: качество одинаково во всех сериях.
+
+    Та же подгонка по тем же профилям, что у vector(), поэтому шкала общая с моделями из рейтингов:
+    вектор по одной опорной задаче сжимается иначе, и безрейтинговая модель обгоняла рейтинговые."""
+    return from_measurements([(item.feature_vector(), 1.0) for tasks in PROFILES.values() for item in tasks]) * quality
+
+
 def tokens_per_second(snapshot: "BenchmarkSnapshot", openrouter_id: str) -> float | None:
     """Скорость модели по замеру Artificial Analysis, токенов в секунду; None, если замера нет."""
     speed = snapshot.value("aa:speed", openrouter_id)
