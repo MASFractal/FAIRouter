@@ -54,7 +54,7 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 | Ссылка | Зачем |
 |---|---|
 | `AI` | `Vector`, `Matrix` |
-| `AI.LLM` | клиент OpenRouter, структурированный ответ по схеме |
+| `AI.LLM` | клиент поставщика по протоколу OpenAI (FractalRouter, OpenRouter), структурированный ответ по схеме |
 | `AI.NLP` | разбиение на предложения с учетом русских сокращений |
 | `AI.NeuralNetworks` | автоматическое дифференцирование и оптимизаторы (пространство имен `AI.ML.NeuralNetworks.V2`) |
 | `Microsoft.Data.Sqlite` | хранилище весов и журнала ходов |
@@ -84,18 +84,38 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 
 ## Использование
 
-Короткий путь через фасад:
+Короткий путь через фасад и фабрику поставщика:
 
 ```csharp
-Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = "...", ModelName = "openai/gpt-4o-mini" });
+FaiRouter router = await FaiRouter.FromFractalRouterAsync(
+    apiKey: "rtr_live_...",                                   // ключ FractalRouter, https://fractalrouter.ru
+    modelIds: ["google/gemini-2.5-flash", "openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5"],
+    databasePath: "fai-router.db");                           // веса и журнал; пустой файл на старте в порядке
 
-FaiRouter router = new(candidates, (candidate, messages) => AskModel(candidate.Name, messages), "fai-router.db");
 RouterAnswer answer = await router.AskAsync(prompt);           // одна реплика
 RouterAnswer replied = await router.AskAsync(messages);        // диалог целиком, IEnumerable<LLMMessage>
 
+// Отзыв человека: от 0 (плохо) до 1 (отлично); 0.2 означает плохой ответ
 router.Feedback(answer.RoundId!.Value, score: 1.0);
 router.Train(epochs: 10);
 router.Save();
+```
+
+Фабрики три: `FromFractalRouterAsync` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к моделям
+с оплатой в рублях, не путать с FractalGPT), `FromOpenRouterAsync` для OpenRouter и
+`FromOpenAiCompatibleAsync(baseUrl, ...)` для любого сервера по протоколу OpenAI chat completions.
+Через одного поставщика и один ключ идут и ответы кандидатов, и работа судьи (`judgeModel`, по
+умолчанию `openai/gpt-4o-mini`). Цены берутся из каталога поставщика по идентификатору модели, у
+FractalRouter в рублях, у OpenRouter в долларах; для выбора важны только отношения цен кандидатов.
+Модели, которой в каталоге нет, цену задает словарь `prices` со значениями `new Price(вход, выход)`
+за миллион токенов. Начальные веса кандидатов приходят из снимка замеров, встроенного в сборку.
+
+Своего исполнителя и свои кандидаты задают через конструктор, а клиент судьи через `Settings.LLM`:
+
+```csharp
+Settings.LLM = new OpenAiCompatibleLlm(Providers.FractalRouter, "rtr_live_...", "openai/gpt-4o-mini");
+
+FaiRouter router = new(candidates, (candidate, messages) => AskModel(candidate.Name, messages), "fai-router.db");
 ```
 
 Сервер, совместимый с OpenAI, для подключения к OpenClaw есть в Python-версии; для C# он пока не
@@ -104,18 +124,17 @@ router.Save();
 Тот же контур по частям:
 
 ```csharp
-// Клиент модели: общий на процесс либо свой у каждого компонента
-Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions
-{
-    ApiKey = "...",
-    ModelName = "openai/gpt-4o-mini"
-});
+// Клиент модели: общий на процесс либо свой у каждого компонента. Поставщик любой по протоколу
+// OpenAI: Providers.FractalRouter, Providers.OpenRouter или свой адрес
+Settings.LLM = new OpenAiCompatibleLlm(Providers.FractalRouter, "rtr_live_...", "openai/gpt-4o-mini");
 
-// Кандидаты берутся из каталога: руками задается только скорость, ее поставщик не публикует
-IReadOnlyList<ModelInfo> catalog = await ModelCatalog.FetchAsync();
+// Кандидаты берутся из каталога: руками задается только скорость, ее поставщик не публикует.
+// Каталог FractalRouter отдается по ключу, цены в рублях; каталог OpenRouter открытый, в долларах
+IReadOnlyList<ModelInfo> catalog = await ModelCatalog.FetchFractalRouterAsync("rtr_live_...");
 
-// Снимок замеров: кандидат стартует с прогноза по сериям снимка, а не со случайного вектора
-BenchmarkSnapshot benchmarks = BenchmarkSnapshot.Load("data/benchmark-snapshot.json");
+// Снимок замеров: кандидат стартует с прогноза по сериям снимка, а не со случайного вектора.
+// Снимок встроен в сборку, файл рядом не нужен
+BenchmarkSnapshot benchmarks = BenchmarkSnapshot.LoadEmbedded();
 
 BaseRoutedElement[] candidates =
 [
@@ -163,8 +182,10 @@ StyleClassifier byHaiku = new(haikuClient);
 | [`docs/research/harness/JudgeBenchmark`](../docs/research/harness/JudgeBenchmark) | сравнение моделей в роли судьи на размеченных текстах |
 | [`docs/research/harness/LiveSession`](../docs/research/harness/LiveSession) | живой прогон: настоящие ходы, накопление, обучение |
 
-Ключ OpenRouter берется из переменной `OPENROUTER_API_KEY` либо из файла `key.txt` рядом с
-программой. В систему контроля версий ключ не попадает.
+Стенды ходят в FractalRouter по ключу из переменной `FRACTALROUTER_API_KEY` либо в OpenRouter по
+ключу из `OPENROUTER_API_KEY`; без переменных ключ берется из файла `key.txt` рядом с программой, и
+поставщик опознается по виду ключа (`Providers.FromEnvironment`). В систему контроля версий ключ
+не попадает.
 
 ```bash
 dotnet run --project docs/research/harness/LiveSession

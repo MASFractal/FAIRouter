@@ -50,13 +50,15 @@
 ## Как повторить
 
 Стенд сравнения моделей лежит в [harness/JudgeBenchmark](harness/JudgeBenchmark), а живой прогон в
-[harness/LiveSession](harness/LiveSession). Ключ OpenRouter берется из переменной окружения
-`OPENROUTER_API_KEY` либо из файла `key.txt` рядом с программой. В систему контроля версий ключ не
-попадает.
+[harness/LiveSession](harness/LiveSession). Стенды ходят в [FractalRouter](https://fractalrouter.ru)
+по ключу из переменной `FRACTALROUTER_API_KEY` либо в OpenRouter по ключу из `OPENROUTER_API_KEY`;
+без переменных ключ берется из файла `key.txt` рядом с программой, и поставщик опознается по виду
+ключа. В систему контроля версий ключ не попадает. Замеры в этих документах сделаны в сентябре 2026
+года через OpenRouter, поэтому цены в них в долларах.
 
 ```bash
-OPENROUTER_API_KEY=... dotnet run --project docs/research/harness/JudgeBenchmark
-OPENROUTER_API_KEY=... dotnet run --project docs/research/harness/LiveSession
+FRACTALROUTER_API_KEY=rtr_live_... dotnet run --project docs/research/harness/JudgeBenchmark
+FRACTALROUTER_API_KEY=rtr_live_... dotnet run --project docs/research/harness/LiveSession
 ```
 
 Первый прогон занимает около 80 секунд и делает порядка 40 обращений к моделям дешевого уровня.

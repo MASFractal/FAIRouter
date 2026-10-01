@@ -1,22 +1,41 @@
 # FAIRouter на Python
 
 Перенос библиотеки `FAI.Router` с C# на Python. Устройство, метрика и все находки измерений
-общие, они описаны в [корневом README](../README.md) и в [docs/research](../docs/research).
+общие, они описаны в [корневом README](https://github.com/MASFractal/FAIRouter/blob/main/README.md) и в [docs/research](https://github.com/MASFractal/FAIRouter/tree/main/docs/research).
 Здесь только то, что касается этой версии.
 
 ## Установка
 
-Нужен Python 3.11 и выше. Зависимость одна: `numpy` для векторов и матриц. Обращения к
+Нужен Python 3.10 и выше. Зависимость одна: `numpy` для векторов и матриц. Обращения к
 поставщику моделей идут через встроенный `urllib`, база на встроенном `sqlite3`.
+
+```bash
+pip install fai-router
+```
+
+Пока пакет не выложен на PyPI, та же команда ставит его из репозитория:
+
+```bash
+pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"
+```
+
+После установки файл с вызовом роутера может лежать где угодно. Без установки его кладут в этот
+каталог, `Python`, рядом с пакетом `fai_router`, иначе `import fai_router` пакет не найдет.
+
+Для разработки пакет ставится в режиме правки вместе с тестами, сборка колеса и выкладка делаются
+обычными средствами:
 
 ```bash
 pip install -e ".[test]"
 pytest
+python -m build            # dist/fai_router-*.whl и .tar.gz
+python -m twine upload dist/*
 ```
 
-Свой файл с вызовом роутера кладется в этот каталог, `Python`, рядом с пакетом `fai_router`: иначе
-`import fai_router` пакет не найдет. После `pip install -e .` ограничение снимается, и файл может
-лежать где угодно.
+Выкладку на PyPI делает и действие `.github/workflows/publish-python.yml` по тегу вида `py-v0.1.0`;
+для него в настройках проекта на pypi.org один раз включается доверенная публикация из этого
+репозитория. Снимок замеров `fai_router/data/benchmark-snapshot.json` входит в пакет, а забор
+внешних замеров `fai_router/sources` в него не входит.
 
 ## Отличия от версии на C#
 
@@ -77,7 +96,8 @@ router.save()
 берутся из каталога поставщика по идентификатору модели, у FractalRouter в рублях, у OpenRouter в
 долларах; для выбора важны только отношения цен кандидатов. Модели, которой в каталоге нет, цену
 задает довод `prices={"имя": (вход, выход)}` за миллион токенов. Начальные веса кандидатов
-приходят из снимка замеров `data/benchmark-snapshot.json`, пустая база на старте в порядке.
+приходят из снимка замеров в комплекте пакета (`fai_router/data/benchmark-snapshot.json`), пустая
+база на старте в порядке.
 
 Клиент `OpenRouterClient` принимает `base_url` и повторяет запрос при обрыве соединения, таймауте
 и ответах 429 и 5xx; после исчерпания повторов поднимает `LlmRequestError` с именем поставщика и
@@ -93,7 +113,7 @@ router.save()
 python -m fai_router.server --models google/gemini-2.5-flash,openai/gpt-4.1-mini --db fai-router.db
 ```
 
-Подключение к OpenClaw описано в [корневом README](../README.md).
+Подключение к OpenClaw описано в [корневом README](https://github.com/MASFractal/FAIRouter/blob/main/README.md).
 
 ## Использование
 
@@ -108,7 +128,7 @@ Settings.llm = OpenRouterClient(api_key="...", model="openai/gpt-4o-mini")
 
 models = catalog.fetch()
 # Снимок замеров: кандидат стартует с прогноза по сериям снимка
-snapshot = benchmarks.BenchmarkSnapshot.load("data/benchmark-snapshot.json")
+snapshot = benchmarks.default_snapshot()   # снимок из комплекта пакета, fai_router/data/benchmark-snapshot.json
 candidates = [
     catalog.create_element(next(m for m in models if m.id == "google/gemini-2.5-flash"), tokens_per_second=200, benchmarks=snapshot),
     catalog.create_element(next(m for m in models if m.id == "anthropic/claude-haiku-4.5"), tokens_per_second=60, benchmarks=snapshot),
@@ -133,15 +153,16 @@ round_id = traces.append(trace, trace.requested_spec, actual, prompt)
 
 ## Живой прогон
 
-Стенд [docs/research/harness/LiveSessionPython](../docs/research/harness/LiveSessionPython)
+Стенд [docs/research/harness/LiveSessionPython](https://github.com/MASFractal/FAIRouter/tree/main/docs/research/harness/LiveSessionPython)
 зеркалит стенд на C#: шесть настоящих задач, три модели, полный контур от распознавания задания
-до обучения на журнале. Ключ OpenRouter берется из переменной `OPENROUTER_API_KEY` либо из файла
-`key.txt` рядом со стендом.
+до обучения на журнале. Стенд ходит в FractalRouter по ключу из `FRACTALROUTER_API_KEY` либо в
+OpenRouter по ключу из `OPENROUTER_API_KEY`; без переменных ключ берется из файла `key.txt` рядом
+со стендом, и поставщик опознается по виду ключа.
 
 ```bash
 python docs/research/harness/LiveSessionPython/live_session.py
 ```
 
 Результат и сравнение с C#-версией записаны в
-[docs/research/live-session.md](../docs/research/live-session.md): стиль распознан в шести ходах
+[docs/research/live-session.md](https://github.com/MASFractal/FAIRouter/blob/main/docs/research/live-session.md): стиль распознан в шести ходах
 из шести, ходы разошлись по трем кандидатам, самозакрепления нет.

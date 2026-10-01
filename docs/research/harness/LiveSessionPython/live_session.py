@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -11,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "Python"))
 
 from fai_router import Judge, Settings, env  # noqa: E402
 from fai_router.enums import FeedbackType, Style  # noqa: E402
-from fai_router.llm import OpenRouterClient  # noqa: E402
+from fai_router.llm import OpenRouterClient, provider_from_environment  # noqa: E402
 from fai_router.persistence import SqliteTraceStore, SqliteWeightsStore  # noqa: E402
 from fai_router.routed_element import RoutedElement  # noqa: E402
 from fai_router.services import InputFeaturesService, SpecOutputService  # noqa: E402
@@ -20,15 +19,17 @@ from fai_router.tracking import Feedback  # noqa: E402
 from fai_router.training import JudgeTrainer, RouterTrainer  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-key_file = HERE / "key.txt"
-api_key = os.environ.get("OPENROUTER_API_KEY") or (key_file.read_text().strip() if key_file.exists() else "")
+
+# Поставщик: FractalRouter по ключу FRACTALROUTER_API_KEY либо OpenRouter по OPENROUTER_API_KEY; ключ из
+# key.txt рядом с программой опознается по виду (rtr_live_... это FractalRouter, sk-or-... это OpenRouter)
+base_url, api_key = provider_from_environment(HERE)
 if not api_key:
-    print("Нет ключа: задайте OPENROUTER_API_KEY или положите key.txt рядом с программой.")
+    print("Нет ключа: задайте FRACTALROUTER_API_KEY (или OPENROUTER_API_KEY) либо положите key.txt рядом с программой.")
     sys.exit(1)
 
 
 def client(model: str) -> OpenRouterClient:
-    return OpenRouterClient(api_key, model)
+    return OpenRouterClient(api_key, model, base_url=base_url)
 
 
 # Распознаванием задачи и разбором ответа занимается одна модель, по измерению она лучшая

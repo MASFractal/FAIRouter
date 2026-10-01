@@ -6,14 +6,13 @@ using FAI.Router.JudgeLogic;
 using FAI.Router.LLM;
 using FAI.Router.Services;
 
-// Ключ: переменная окружения OPENROUTER_API_KEY либо файл key.txt рядом с программой
-string keyFile = Path.Combine(AppContext.BaseDirectory, "key.txt");
-string apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
-    ?? (File.Exists(keyFile) ? File.ReadAllText(keyFile).Trim() : "");
+// Поставщик: FractalRouter по ключу FRACTALROUTER_API_KEY либо OpenRouter по OPENROUTER_API_KEY; ключ из
+// key.txt рядом с программой опознается по виду (rtr_live_... это FractalRouter, sk-or-... это OpenRouter)
+(string baseUrl, string apiKey) = Providers.FromEnvironment(AppContext.BaseDirectory);
 
 if (string.IsNullOrWhiteSpace(apiKey))
 {
-    Console.WriteLine("Нет ключа: задайте OPENROUTER_API_KEY или положите key.txt рядом с программой.");
+    Console.WriteLine("Нет ключа: задайте FRACTALROUTER_API_KEY (или OPENROUTER_API_KEY) либо положите key.txt рядом с программой.");
     return;
 }
 
@@ -58,7 +57,7 @@ List<(string Model, int StyleHits, double TermOrder, int SpecHits, int Failures,
 foreach (string model in models)
 {
     // Клиент один на процесс, поэтому модели сравниваются по очереди, а не параллельно
-    Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = apiKey, ModelName = model });
+    Settings.LLM = new OpenAiCompatibleLlm(baseUrl, apiKey, model);
 
     StyleClassifier classifier = new();
     SpecInputService specService = new();

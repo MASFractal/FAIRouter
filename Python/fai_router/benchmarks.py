@@ -113,7 +113,7 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
-# Где искать снимок, если его не назвали: в комплекте пакета, затем в каталоге data репозитория
+# Где искать снимок, если его не назвали: в комплекте пакета; второй путь на случай старой раскладки
 _DEFAULT_PATHS = (
     Path(__file__).resolve().parent / "data" / "benchmark-snapshot.json",
     Path(__file__).resolve().parents[2] / "data" / "benchmark-snapshot.json",

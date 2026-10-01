@@ -233,5 +233,6 @@ deepseek-v4-flash: это самая свежая из четырех модел
 python docs/research/harness/BusinessTasks/business_tasks.py
 ```
 
-Ключ OpenRouter берется из `OPENROUTER_API_KEY` или из `key.txt` рядом со стендом. Ответы моделей и
+Ключ берется из `FRACTALROUTER_API_KEY` (поставщик FractalRouter) или `OPENROUTER_API_KEY` (OpenRouter),
+либо из `key.txt` рядом со стендом, тогда поставщик опознается по виду ключа. Ответы моделей и
 оценки кэшируются в `results/cache.json`, повторный прогон бесплатен.

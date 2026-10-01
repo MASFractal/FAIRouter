@@ -12,7 +12,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from fai_router.llm.client import OPENROUTER_URL
+from fai_router.llm.client import OPENROUTER_URL, base_url_for_key
 from fai_router.router import FaiRouter
 
 # Порт по умолчанию отличается от порта ClawRouter (8402), чтобы не мешать соседям
@@ -121,8 +121,8 @@ def _parse_prices(items: list[str]) -> dict[str, tuple[float, float]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сервер FAIRouter, совместимый с OpenAI chat completions")
     parser.add_argument("--models", required=True, help="идентификаторы моделей через запятую")
-    parser.add_argument("--provider", choices=["fractalrouter", "openrouter"], default="fractalrouter",
-                        help="поставщик: FractalRouter (по умолчанию) или OpenRouter")
+    parser.add_argument("--provider", choices=["auto", "fractalrouter", "openrouter"], default="auto",
+                        help="поставщик: FractalRouter или OpenRouter; auto опознает его по виду ключа")
     parser.add_argument("--base-url", default=None,
                         help="адрес любого поставщика по протоколу OpenAI, вида https://host/v1")
     parser.add_argument("--key", default=os.environ.get("FRACTALROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY"),
@@ -142,7 +142,7 @@ def main() -> None:
     if args.base_url:
         router = FaiRouter.from_openai_compatible(args.base_url, args.key, models, database_path=args.db,
                                                   prices=prices, measure=not args.no_measure)
-    elif args.provider == "openrouter":
+    elif args.provider == "openrouter" or (args.provider == "auto" and base_url_for_key(args.key) == OPENROUTER_URL):
         router = FaiRouter.from_openai_compatible(OPENROUTER_URL, args.key, models, database_path=args.db,
                                                   prices=prices, measure=not args.no_measure)
     else:

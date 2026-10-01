@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -64,6 +65,23 @@ public sealed class BenchmarkSnapshot
 
     public static BenchmarkSnapshot Load(string path) =>
         JsonSerializer.Deserialize<BenchmarkSnapshot>(File.ReadAllText(path)) ?? new BenchmarkSnapshot();
+
+    /// <summary>
+    /// Имя ресурса со снимком из комплекта сборки: тот же файл, что в пакете на Python
+    /// </summary>
+    public const string ResourceName = "FAI.Router.benchmark-snapshot.json";
+
+    /// <summary>
+    /// Снимок из комплекта сборки, чтобы кандидаты стартовали с прогноза по замерам, а не со
+    /// случайного вектора, даже когда файла снимка рядом нет
+    /// </summary>
+    public static BenchmarkSnapshot LoadEmbedded()
+    {
+        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
+            ?? throw new InvalidOperationException($"В сборке нет ресурса {ResourceName}.");
+
+        return JsonSerializer.Deserialize<BenchmarkSnapshot>(stream) ?? new BenchmarkSnapshot();
+    }
 
 }
 

@@ -2,23 +2,24 @@ using AI.LLM.Core.Models.Common.Messages;
 using AI.LLM.Services.LLM;
 using FAI.Router;
 using FAI.Router.JudgeLogic;
+using FAI.Router.LLM;
 using FAI.Router.Services;
 
 // Различается ли качество моделей по типам задач. Роутинга здесь нет: каждая модель отвечает
 // на каждую задачу, и качество каждого ответа измеряется судьей. Если разброс внутри типа
 // близок к нулю, роутеру нечему учиться и обучение бессмысленно.
 
-string keyFile = Path.Combine(AppContext.BaseDirectory, "key.txt");
-string apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
-    ?? (File.Exists(keyFile) ? File.ReadAllText(keyFile).Trim() : "");
+// Поставщик: FractalRouter по ключу FRACTALROUTER_API_KEY либо OpenRouter по OPENROUTER_API_KEY; ключ из
+// key.txt рядом с программой опознается по виду (rtr_live_... это FractalRouter, sk-or-... это OpenRouter)
+(string baseUrl, string apiKey) = Providers.FromEnvironment(AppContext.BaseDirectory);
 
 if (string.IsNullOrWhiteSpace(apiKey))
 {
-    Console.WriteLine("Нет ключа: задайте OPENROUTER_API_KEY или положите key.txt рядом с программой.");
+    Console.WriteLine("Нет ключа: задайте FRACTALROUTER_API_KEY (или OPENROUTER_API_KEY) либо положите key.txt рядом с программой.");
     return;
 }
 
-LLMBase Client(string model) => new LLMWithOpenRouterClient(new LLMOptions { ApiKey = apiKey, ModelName = model });
+LLMBase Client(string model) => new OpenAiCompatibleLlm(baseUrl, apiKey, model);
 
 // Распознает задачу и разбирает ответы одна модель, чтобы измерение было единообразным
 Settings.LLM = Client("openai/gpt-4o-mini");

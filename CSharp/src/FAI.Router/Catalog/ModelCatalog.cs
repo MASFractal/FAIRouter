@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using FAI.Router.Enums;
 using FAI.Router.RoutedElements;
@@ -9,11 +10,15 @@ using AI.DataStructs.Algebraic;
 namespace FAI.Router.Catalog;
 
 /// <summary>
-/// Каталог моделей: цены, размеры окна и возможности берутся у OpenRouter, а не вбиваются руками.
+/// Каталог моделей: цены, размеры окна и возможности берутся у поставщика, FractalRouter или OpenRouter,
+/// а не вбиваются руками.
 /// </summary>
 /// <remarks>
-/// Скорость поставщик не публикует, поэтому число токенов в секунду задает вызывающий. Это
+/// Скорость поставщики не публикуют, поэтому число токенов в секунду задает вызывающий. Это
 /// единственное, что каталог не закрывает, и в метрике R скорость участвует наравне с ценой.
+/// Цены хранятся в валюте поставщика за миллион токенов: у OpenRouter доллары, у FractalRouter рубли.
+/// Для выбора важны только отношения цен кандидатов между собой, поэтому валюта роли не играет, лишь бы
+/// все кандидаты одного роутера были из одного каталога.
 /// </remarks>
 public static class ModelCatalog
 {
@@ -21,6 +26,11 @@ public static class ModelCatalog
     /// Открытый список моделей OpenRouter, ключ для него не нужен
     /// </summary>
     public const string OpenRouterModels = "https://openrouter.ai/api/v1/models";
+
+    /// <summary>
+    /// Список моделей FractalRouter, отдается только по ключу
+    /// </summary>
+    public const string FractalRouterModels = "https://api.fractalrouter.ru/v1/models";
 
     /// <summary>
     /// Скорость модели, о которой ничего не известно, токенов в секунду: обычное значение для
@@ -31,7 +41,7 @@ public static class ModelCatalog
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>
-    /// Загружает каталог у поставщика
+    /// Загружает каталог OpenRouter, ключ не нужен
     /// </summary>
     /// <param name="client">Готовый клиент; не задан, значит создается свой</param>
     /// <param name="cancellationToken">Токен отмены</param>
@@ -41,6 +51,27 @@ public static class ModelCatalog
         string json = await (client ?? own!).GetStringAsync(OpenRouterModels, cancellationToken).ConfigureAwait(false);
 
         return Parse(json);
+    }
+
+    /// <summary>
+    /// Загружает каталог FractalRouter: цены в рублях за миллион токенов
+    /// </summary>
+    /// <param name="apiKey">Ключ FractalRouter, без него каталог не отдается</param>
+    /// <param name="client">Готовый клиент; не задан, значит создается свой</param>
+    /// <param name="cancellationToken">Токен отмены</param>
+    public static async Task<IReadOnlyList<ModelInfo>> FetchFractalRouterAsync(string apiKey, HttpClient? client = null, CancellationToken cancellationToken = default)
+    {
+        using HttpClient? own = client is null ? new HttpClient() : null;
+        using HttpRequestMessage request = new(HttpMethod.Get, FractalRouterModels);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using HttpResponseMessage response = await (client ?? own!).SendAsync(request, cancellationToken).ConfigureAwait(false);
+        string json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"Каталог FractalRouter не отдан: {(int)response.StatusCode} {response.ReasonPhrase}: {json}");
+
+        return ParseFractalRouter(json);
     }
 
     /// <summary>
@@ -117,6 +148,56 @@ public static class ModelCatalog
         }
 
         return models;
+    }
+
+    /// <summary>
+    /// Разбирает ответ каталога FractalRouter: цены уже за миллион токенов, в рублях. Предел ответа
+    /// каталог не сообщает, поэтому ограничения по объему у кандидата нет.
+    /// </summary>
+    /// <param name="json">Тело ответа</param>
+    public static IReadOnlyList<ModelInfo> ParseFractalRouter(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement root = document.RootElement;
+        JsonElement items = root.ValueKind == JsonValueKind.Array ? root : root.GetProperty("data");
+        List<ModelInfo> models = [];
+
+        foreach (JsonElement item in items.EnumerateArray())
+        {
+            JsonElement pricing = item.TryGetProperty("pricing", out JsonElement found) ? found : default;
+
+            // Умение вызывать инструменты каталог не сообщает; считаем, что умеют все, иначе запрос
+            // с required: Capability.Tools не нашел бы ни одного кандидата
+            Capability capabilities = Capability.Code | Capability.Formulas | Capability.Tools;
+
+            if (item.TryGetProperty("modalities", out JsonElement modalities)
+                && modalities.ValueKind == JsonValueKind.Array
+                && modalities.EnumerateArray().Any(mode => mode.GetString() is "vision" or "image"))
+                capabilities |= Capability.Vision;
+
+            models.Add(new ModelInfo(
+                item.GetProperty("id").GetString() ?? "",
+                item.TryGetProperty("name", out JsonElement title) ? title.GetString() ?? "" : item.GetProperty("id").GetString() ?? "",
+                RubPerMillion(pricing, "prompt_rub_per_1m"),
+                RubPerMillion(pricing, "completion_rub_per_1m"),
+                Number(item, "context_length"),
+                Number(item, "max_completion_tokens"),
+                capabilities));
+        }
+
+        return models;
+    }
+
+    // Цены FractalRouter приходят строками, иногда с запятой вместо точки, и уже за миллион токенов
+    private static double RubPerMillion(JsonElement pricing, string field)
+    {
+        if (pricing.ValueKind != JsonValueKind.Object || !pricing.TryGetProperty(field, out JsonElement value))
+            return 0;
+
+        string text = (value.ValueKind == JsonValueKind.Number ? value.GetDouble().ToString(CultureInfo.InvariantCulture) : value.GetString() ?? "")
+            .Replace(',', '.');
+
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double perMillion) ? perMillion : 0;
     }
 
     // Цены поставщик отдает строками и за один токен

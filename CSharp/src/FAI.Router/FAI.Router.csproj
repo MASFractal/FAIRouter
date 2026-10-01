@@ -20,6 +20,7 @@
   <!-- Профили задач по сериям рейтингов: один файл на обе версии библиотеки, см. BenchmarkPrior -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\Python\fai_router\data\benchmark_profiles.json" LogicalName="FAI.Router.benchmark_profiles.json" />
+    <EmbeddedResource Include="..\..\..\Python\fai_router\data\benchmark-snapshot.json" LogicalName="FAI.Router.benchmark-snapshot.json" />
   </ItemGroup>
 
 </Project>

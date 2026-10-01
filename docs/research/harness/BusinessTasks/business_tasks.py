@@ -8,8 +8,9 @@
    различить, судья содержания обязан развести.
 
 Ответы моделей и оценки кэшируются в results/cache.json: повторный прогон бесплатен, а новые
-задачи или модели дозапрашиваются. Ключ OpenRouter берется из OPENROUTER_API_KEY или из key.txt
-рядом со стендом либо у стенда RouterEval.
+задачи или модели дозапрашиваются. Ключ берется из FRACTALROUTER_API_KEY (поставщик FractalRouter)
+или OPENROUTER_API_KEY (OpenRouter), либо из key.txt рядом со стендом или у стенда RouterEval; у
+ключа из файла поставщик опознается по виду.
 
     python business_tasks.py [--limit N] [--only recognition|live|controls]
 """
@@ -30,7 +31,7 @@ sys.path.insert(0, str(ROOT / "Python"))
 
 from fai_router import Judge  # noqa: E402
 from fai_router.benchmarks import BenchmarkSnapshot  # noqa: E402
-from fai_router.llm.client import OpenRouterClient  # noqa: E402
+from fai_router.llm.client import OpenRouterClient, provider_from_environment  # noqa: E402
 from fai_router.llm.content_judge import ContentJudge  # noqa: E402
 from fai_router.llm.spec_input import SpecInputRecognizer  # noqa: E402
 from fai_router.services import InputFeaturesService, SpecOutputService  # noqa: E402
@@ -40,7 +41,7 @@ from fai_router.tracking import InputFeatures  # noqa: E402
 from fai_router.training import benchmark_prior  # noqa: E402
 
 TASKS = ROOT / "data" / "business-tasks.json"
-SNAPSHOT = ROOT / "data" / "benchmark-snapshot.json"
+SNAPSHOT = ROOT / "Python" / "fai_router" / "data" / "benchmark-snapshot.json"
 CONTROLS = HERE / "control-pairs.json"
 RESULTS = HERE / "results"
 CACHE = RESULTS / "cache.json"
@@ -66,13 +67,20 @@ _lock = threading.Lock()
 SPEC_TAG = ""
 
 
+# Адрес поставщика, определяется вместе с ключом
+BASE_URL = ""
+
+
 def api_key() -> str:
-    if os.environ.get("OPENROUTER_API_KEY"):
-        return os.environ["OPENROUTER_API_KEY"].strip()
-    for path in (HERE / "key.txt", HERE.parent / "RouterEval" / "key.txt"):
-        if path.exists():
-            return path.read_text(encoding="utf-8").strip()
-    sys.exit("Нет ключа: задайте OPENROUTER_API_KEY или положите key.txt рядом со стендом.")
+    global BASE_URL
+    BASE_URL, key = provider_from_environment(HERE, HERE.parent / "RouterEval")
+    if not key:
+        sys.exit("Нет ключа: задайте FRACTALROUTER_API_KEY (или OPENROUTER_API_KEY) либо положите key.txt рядом со стендом.")
+    return key
+
+
+def client(key: str, model: str) -> OpenRouterClient:
+    return OpenRouterClient(key, model, base_url=BASE_URL)
 
 
 def load_cache() -> dict:
@@ -158,7 +166,7 @@ def measure_recognition(cache: dict, tasks: list[dict], recognizer: SpecInputRec
 def measure_live(cache: dict, tasks: list[dict], recognizer: SpecInputRecognizer, key: str,
                  measurer: SpecOutputService, judge: ContentJudge) -> None:
     live = [task for task in tasks if task.get("live")]
-    clients = {model: OpenRouterClient(key, model) for model in CANDIDATES}
+    clients = {model: client(key, model) for model in CANDIDATES}
 
     def answer(task: dict, model: str) -> str:
         return cached(cache, f"answer:{model}:{task['id']}",
@@ -284,10 +292,10 @@ def main() -> None:
     if args.limit:
         tasks = tasks[:args.limit]
 
-    recognition_llm = OpenRouterClient(key, RECOGNIZER_MODEL)
+    recognition_llm = client(key, RECOGNIZER_MODEL)
     recognizer = SpecInputRecognizer(recognition_llm)
     measurer = SpecOutputService(recognition_llm)
-    judge = ContentJudge(OpenRouterClient(key, JUDGE_MODEL))
+    judge = ContentJudge(client(key, JUDGE_MODEL))
 
     print(f"Распознавание и замер формы: {RECOGNIZER_MODEL}; судья содержания: {JUDGE_MODEL}; "
           f"кандидаты: {', '.join(CANDIDATES)}")

@@ -475,3 +475,7 @@ __pycache__/
 /Python/fai_router/sources/
 /docs/research/harness/BusinessTasks/results/
 /Python/tests/sources/
+
+# Сборка пакета fai-router
+/Python/dist/
+/Python/build/

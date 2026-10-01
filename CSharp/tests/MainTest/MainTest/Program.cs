@@ -1,21 +1,19 @@
-using AI.LLM.Services.LLM;
 using FAI.Router;
 using FAI.Router.JudgeLogic;
+using FAI.Router.LLM;
 using FAI.Router.RotationTracking;
 using FAI.Router.RoutedElements;
 using FAI.Router.Services;
 
-// Ключ берется из key.txt рядом с проектом (в git не попадает) или из переменной окружения
+// Ключ берется из key.txt рядом с проектом (в git не попадает) или из переменной окружения.
+// Поставщик по умолчанию FractalRouter; с ключом OpenRouter поменяйте адрес на Providers.OpenRouter
 string keyFile = Path.Combine(AppContext.BaseDirectory, "key.txt");
 string apiKey = File.Exists(keyFile)
     ? File.ReadAllText(keyFile).Trim()
-    : Environment.GetEnvironmentVariable("OPENROUTER_API_KEY") ?? "";
+    : Environment.GetEnvironmentVariable("FRACTALROUTER_API_KEY")
+      ?? Environment.GetEnvironmentVariable("OPENROUTER_API_KEY") ?? "";
 
-Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions
-{
-    ApiKey = apiKey,
-    ModelName = "openai/gpt-4o-mini"
-});
+Settings.LLM = new OpenAiCompatibleLlm(Providers.FractalRouter, apiKey, "openai/gpt-4o-mini");
 
 const string Prompt = "Напиши обзор методов кластеризации на 4000 знаков в научном стиле, "
     + "раздели на 4 раздела, добавь таблицу сравнения и ссылки на источники.";

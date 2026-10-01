@@ -3,10 +3,12 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import os
 import socket
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("fai_router")
@@ -16,6 +18,33 @@ log = logging.getLogger("fai_router")
 # подключается через base_url
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 FRACTALROUTER_URL = "https://api.fractalrouter.ru/v1"
+
+# Переменные окружения с ключами, по порядку предпочтения
+KEY_VARIABLES = (("FRACTALROUTER_API_KEY", FRACTALROUTER_URL), ("OPENROUTER_API_KEY", OPENROUTER_URL))
+
+
+def base_url_for_key(api_key: str) -> str:
+    """Поставщик по виду ключа: ключи OpenRouter начинаются с sk-or-, ключи FractalRouter с
+    rtr_live_ или frr_test_. Незнакомый ключ считается ключом FractalRouter."""
+    return OPENROUTER_URL if api_key.startswith("sk-or-") else FRACTALROUTER_URL
+
+
+def provider_from_environment(*key_directories: "str | os.PathLike[str]") -> tuple[str, str]:
+    """Поставщик и ключ из окружения: FRACTALROUTER_API_KEY дает FractalRouter, OPENROUTER_API_KEY
+    дает OpenRouter, иначе ключ читается из key.txt в указанных каталогах и поставщик опознается по
+    виду ключа. Пустой ключ означает, что ничего не найдено."""
+    for variable, base_url in KEY_VARIABLES:
+        key = os.environ.get(variable, "").strip()
+        if key:
+            return base_url, key
+    for directory in key_directories:
+        path = Path(directory) / "key.txt"
+        if path.is_file():
+            key = path.read_text(encoding="utf-8").strip()
+            if key:
+                return base_url_for_key(key), key
+    return FRACTALROUTER_URL, ""
+
 
 # Ответы поставщика, после которых запрос стоит повторить: перегрузка и сбои на его стороне
 _RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})

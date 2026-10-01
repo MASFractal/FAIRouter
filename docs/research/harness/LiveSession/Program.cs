@@ -3,6 +3,7 @@ using AI.LLM.Services.LLM;
 using FAI.Router;
 using FAI.Router.Enums;
 using FAI.Router.JudgeLogic;
+using FAI.Router.LLM;
 using FAI.Router.Persistence;
 using FAI.Router.RotationTracking;
 using FAI.Router.RoutedElements;
@@ -12,22 +13,22 @@ using FAI.Router.Training;
 // Живой прогон: настоящие ходы настоящими моделями, оценка судьи, накопление и обучение
 // на накопленном. Отличается от синтетических проверок тем, что ответы никто не подбирал.
 
-string keyFile = Path.Combine(AppContext.BaseDirectory, "key.txt");
-string apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
-    ?? (File.Exists(keyFile) ? File.ReadAllText(keyFile).Trim() : "");
+// Поставщик: FractalRouter по ключу FRACTALROUTER_API_KEY либо OpenRouter по OPENROUTER_API_KEY; ключ из
+// key.txt рядом с программой опознается по виду (rtr_live_... это FractalRouter, sk-or-... это OpenRouter)
+(string baseUrl, string apiKey) = Providers.FromEnvironment(AppContext.BaseDirectory);
 
 if (string.IsNullOrWhiteSpace(apiKey))
 {
-    Console.WriteLine("Нет ключа: задайте OPENROUTER_API_KEY или положите key.txt рядом с программой.");
+    Console.WriteLine("Нет ключа: задайте FRACTALROUTER_API_KEY (или OPENROUTER_API_KEY) либо положите key.txt рядом с программой.");
     return;
 }
 
-LLMBase Client(string model) => new LLMWithOpenRouterClient(new LLMOptions { ApiKey = apiKey, ModelName = model });
+LLMBase Client(string model) => new OpenAiCompatibleLlm(baseUrl, apiKey, model);
 
 // Распознаванием задачи и разбором ответа занимается одна модель, по измерению она лучшая
 Settings.LLM = Client("openai/gpt-4o-mini");
 
-// Кандидаты: цены и скорость взяты из прайса OpenRouter
+// Кандидаты: цены и скорость взяты из прайса OpenRouter в день замера
 (BaseRoutedElement Element, LLMBase Llm)[] candidates =
 [
     (new BaseRoutedElement { Name = "gemini-2.5-flash", TPS = 200, DPMTInp = 0.30, DPMTOutp = 2.50 }, Client("google/gemini-2.5-flash")),

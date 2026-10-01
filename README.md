@@ -99,9 +99,15 @@ router.train(epochs=10)                 # обучение по журналу �
 router.save()                           # веса в базу; до этого вызова таблицы весов пусты
 ```
 
-Файл с этим кодом кладется в каталог `Python` репозитория, рядом с пакетом `fai_router`, иначе
-`import fai_router` не найдет пакет. Второй способ: поставить пакет командой `pip install -e Python`,
-тогда файл может лежать где угодно.
+Пакет ставится как любая библиотека, после этого файл с кодом может лежать где угодно:
+
+```bash
+pip install fai-router
+```
+
+Пока пакет не выложен на PyPI, та же команда ставит его прямо из репозитория:
+`pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"`. Без установки
+файл с кодом кладется в каталог `Python` репозитория, рядом с пакетом `fai_router`.
 
 Поставщики задаются фабриками: `FaiRouter.from_fractalrouter` для [FractalRouter](https://fractalrouter.ru),
 `FaiRouter.from_openrouter` для OpenRouter и `FaiRouter.from_openai_compatible(base_url, ...)` для
@@ -114,7 +120,8 @@ router.save()                           # веса в базу; до этого 
 
 Пустая база на старте это норма: таблицы весов заполняются при `save()`, журнал при `ask()` и
 `feedback()`. До первого обучения кандидаты стартуют с прогноза по снимку внешних замеров
-`data/benchmark-snapshot.json`, поэтому выбор осмыслен с первого хода, а отзывы его уточняют.
+в комплекте пакета (`fai_router/data/benchmark-snapshot.json`), поэтому выбор осмыслен с первого хода,
+а отзывы его уточняют.
 
 Обрыв соединения с поставщиком (`RemoteDisconnected`, таймаут, ответ 429 или 5xx) клиент повторяет
 трижды с растущей паузой, после чего сообщает, какой поставщик и на какой модели не ответил. Если
@@ -125,18 +132,24 @@ router.save()                           # веса в базу; до этого 
 C#:
 
 ```csharp
-Settings.LLM = new LLMWithOpenRouterClient(new LLMOptions { ApiKey = "...", ModelName = "openai/gpt-4o-mini" });
-
-FaiRouter router = new(candidates, (candidate, messages) => Ask(candidate.Name, messages), "fai-router.db");
+FaiRouter router = await FaiRouter.FromFractalRouterAsync(
+    apiKey: "rtr_live_...",                                   // ключ FractalRouter
+    modelIds: ["google/gemini-2.5-flash", "openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5"],
+    databasePath: "fai-router.db");
 
 RouterAnswer answer = await router.AskAsync("Напиши обзор методов кластеризации на 1500 знаков");
 Console.WriteLine($"{answer.Winner.Name}: {answer.Score}");
 Console.WriteLine(answer.Critic);
 
-router.Feedback(answer.RoundId!.Value, 1.0);
+router.Feedback(answer.RoundId!.Value, 1.0);    // отзыв от 0 (плохо) до 1 (отлично)
 router.Train(epochs: 10);
 router.Save();
 ```
+
+Фабрики в C# те же, что в Python: `FromFractalRouterAsync`, `FromOpenRouterAsync` и
+`FromOpenAiCompatibleAsync(baseUrl, ...)`. Свои кандидаты и свой исполнитель передаются в конструктор
+`FaiRouter`, а клиент судьи задается через `Settings.LLM`, например
+`new OpenAiCompatibleLlm(Providers.FractalRouter, "rtr_live_...", "openai/gpt-4o-mini")`.
 
 Ход по диалогу из нескольких реплик устроен одинаково в обеих версиях: `router.ask_messages(messages)`
 в Python и `router.AskAsync(messages)` в C#, где `messages` это реплики по порядку (`IEnumerable<LLMMessage>`
@@ -236,19 +249,20 @@ BaseRoutedElement winner = chosen.Top[0].Element;
 ## Установка в OpenClaw
 
 OpenClaw подключает поставщиков через настройки в `~/.openclaw/openclaw.json`, и FAIRouter встает
-туда как еще один поставщик с одной моделью `auto`. Нужен Python 3.11 и ключ FractalRouter либо OpenRouter.
+туда как еще один поставщик с одной моделью `auto`. Нужен Python 3.10 и ключ FractalRouter либо OpenRouter.
 
 Запустите сервер, перечислив модели, между которыми выбирать:
 
 ```bash
-pip install -e Python
-FRACTALROUTER_API_KEY=rtr_live_... python -m fai_router.server \
+pip install fai-router
+FRACTALROUTER_API_KEY=rtr_live_... fai-router \
     --models google/gemini-2.5-flash,openai/gpt-4.1-mini,anthropic/claude-haiku-4.5 \
     --db ~/.openclaw/fai-router.db --port 8412
 ```
 
-По умолчанию сервер ходит в FractalRouter. Для OpenRouter добавьте `--provider openrouter` и ключ в
-`OPENROUTER_API_KEY`, для другого совместимого сервера укажите `--base-url https://host/v1`. Цену
+Поставщика сервер опознает по виду ключа: `rtr_live_...` это FractalRouter, `sk-or-...` это OpenRouter;
+ключ OpenRouter можно задать и переменной `OPENROUTER_API_KEY`. Довод `--provider` задает поставщика
+явно, для другого совместимого сервера укажите `--base-url https://host/v1`. Цену
 модели, которой нет в каталоге поставщика, задает довод `--price имя=вход:выход` за миллион токенов.
 
 Сервер отвечает по протоколу OpenAI chat completions на `http://127.0.0.1:8412/v1`. Добавьте его
@@ -500,7 +514,7 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 | Зависимость | Зачем |
 |---|---|
 | `AI` | `Vector`, `Matrix` |
-| `AI.LLM` | клиент OpenRouter и структурированный ответ |
+| `AI.LLM` | клиент поставщика по протоколу OpenAI (FractalRouter, OpenRouter) и структурированный ответ |
 | `AI.NLP` | разбиение на предложения с учетом русских сокращений |
 | `AI.NeuralNetworks` | автоматическое дифференцирование и оптимизаторы для обучения весов |
 | `Microsoft.Data.Sqlite` | хранилище весов и накопленных ходов |
@@ -509,11 +523,14 @@ dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
 
 ### Python
 
-Нужен Python 3.11 и выше, внешних зависимостей всего одна: `numpy`. Обращения к OpenRouter идут
+Нужен Python 3.10 и выше, внешних зависимостей всего одна: `numpy`. Обращения к поставщику идут
 через встроенный `urllib`, база через встроенный `sqlite3`, никаких дополнительных пакетов ставить
-не нужно.
+не нужно. Пакет ставится как любая библиотека; до выкладки на PyPI его ставят из репозитория, а
+режим правки нужен для разработки:
 
 ```bash
+pip install fai-router
+pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"
 pip install -e Python
 ```
 

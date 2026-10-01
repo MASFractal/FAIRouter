@@ -95,3 +95,24 @@ def test_overload_is_retried(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda seconds: None)
     assert OpenRouterClient("ключ", "m").complete([{"role": "user", "content": "x"}]) == "ok"
     assert len(attempts) == 2
+
+
+def test_provider_is_recognized_by_key_shape(monkeypatch, tmp_path):
+    from fai_router.llm.client import base_url_for_key, provider_from_environment
+
+    assert base_url_for_key("sk-or-v1-abc") == OPENROUTER_URL
+    assert base_url_for_key("rtr_live_abc") == FRACTALROUTER_URL
+    assert base_url_for_key("frr_test_abc") == FRACTALROUTER_URL
+
+    monkeypatch.delenv("FRACTALROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert provider_from_environment(tmp_path) == (FRACTALROUTER_URL, "")
+
+    (tmp_path / "key.txt").write_text("sk-or-v1-file\n", encoding="utf-8")
+    assert provider_from_environment(tmp_path) == (OPENROUTER_URL, "sk-or-v1-file")
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    assert provider_from_environment(tmp_path) == (OPENROUTER_URL, "sk-or-env")
+    # Ключ FractalRouter в окружении главнее: наш поставщик первый
+    monkeypatch.setenv("FRACTALROUTER_API_KEY", " rtr_live_env ")
+    assert provider_from_environment(tmp_path) == (FRACTALROUTER_URL, "rtr_live_env")
