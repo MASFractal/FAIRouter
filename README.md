@@ -81,20 +81,46 @@ FAIRouter выбирает исполнителя сам, а затем пров
 ```python
 from fai_router import FaiRouter
 
-router = FaiRouter.from_openrouter(
-    api_key="...",
+router = FaiRouter.from_fractalrouter(
+    api_key="rtr_live_...",               # ключ FractalRouter, https://fractalrouter.ru
     model_ids=["google/gemini-2.5-flash", "openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5"],
-    database_path="fai-router.db",
+    database_path="fai-router.db",        # веса и журнал ходов; пустой файл на старте в порядке
 )
 
 answer = router.ask("Напиши обзор методов кластеризации на 1500 знаков в научном стиле")
 print(answer.winner, answer.score)   # кто ответил и оценка судьи
 print(answer.critic)                 # расхождения с заданием по пунктам
 
-router.feedback(answer.round_id, 1.0)   # отзыв человека, если есть
-router.train(epochs=10)                 # обучение по журналу
-router.save()
+# Отзыв человека на ход: число от 0 до 1. Единица означает отличный ответ, ноль никуда
+# не годный, 0.5 так себе. Отзыв перезаписывает автоматическую оценку судьи
+router.feedback(answer.round_id, 1.0)   # ответ отличный
+# router.feedback(answer.round_id, 0.2) # ответ плохой
+router.train(epochs=10)                 # обучение по журналу ходов и отзывов
+router.save()                           # веса в базу; до этого вызова таблицы весов пусты
 ```
+
+Файл с этим кодом кладется в каталог `Python` репозитория, рядом с пакетом `fai_router`, иначе
+`import fai_router` не найдет пакет. Второй способ: поставить пакет командой `pip install -e Python`,
+тогда файл может лежать где угодно.
+
+Поставщики задаются фабриками: `FaiRouter.from_fractalrouter` для [FractalRouter](https://fractalrouter.ru),
+`FaiRouter.from_openrouter` для OpenRouter и `FaiRouter.from_openai_compatible(base_url, ...)` для
+любого сервера по протоколу OpenAI chat completions. FractalRouter это наш шлюз к четырем сотням
+моделей с оплатой в рублях, он не связан с FractalGPT. Ответы кандидатов и работа модели-судьи
+(`judge_model`, по умолчанию `openai/gpt-4o-mini`) идут через одного поставщика и один ключ. Цена
+модели берется из каталога поставщика по ее идентификатору: у FractalRouter в рублях, у OpenRouter в
+долларах, для выбора важны только отношения цен между кандидатами. Модели, которой в каталоге нет,
+цену задает довод `prices={"имя": (вход, выход)}` за миллион токенов.
+
+Пустая база на старте это норма: таблицы весов заполняются при `save()`, журнал при `ask()` и
+`feedback()`. До первого обучения кандидаты стартуют с прогноза по снимку внешних замеров
+`data/benchmark-snapshot.json`, поэтому выбор осмыслен с первого хода, а отзывы его уточняют.
+
+Обрыв соединения с поставщиком (`RemoteDisconnected`, таймаут, ответ 429 или 5xx) клиент повторяет
+трижды с растущей паузой, после чего сообщает, какой поставщик и на какой модели не ответил. Если
+обрыв повторяется и после повторов, поставщик недоступен из вашей сети: так ведет себя OpenRouter
+из-за блокировок и прокси, и в этом случае выручает FractalRouter. Сбой судьи ход не роняет: ответ
+исполнителя возвращается без оценки и пишется в журнал без автоотзыва.
 
 C#:
 
@@ -210,16 +236,20 @@ BaseRoutedElement winner = chosen.Top[0].Element;
 ## Установка в OpenClaw
 
 OpenClaw подключает поставщиков через настройки в `~/.openclaw/openclaw.json`, и FAIRouter встает
-туда как еще один поставщик с одной моделью `auto`. Нужен Python 3.11 и ключ OpenRouter.
+туда как еще один поставщик с одной моделью `auto`. Нужен Python 3.11 и ключ FractalRouter либо OpenRouter.
 
 Запустите сервер, перечислив модели, между которыми выбирать:
 
 ```bash
 pip install -e Python
-OPENROUTER_API_KEY=... python -m fai_router.server \
+FRACTALROUTER_API_KEY=rtr_live_... python -m fai_router.server \
     --models google/gemini-2.5-flash,openai/gpt-4.1-mini,anthropic/claude-haiku-4.5 \
     --db ~/.openclaw/fai-router.db --port 8412
 ```
+
+По умолчанию сервер ходит в FractalRouter. Для OpenRouter добавьте `--provider openrouter` и ключ в
+`OPENROUTER_API_KEY`, для другого совместимого сервера укажите `--base-url https://host/v1`. Цену
+модели, которой нет в каталоге поставщика, задает довод `--price имя=вход:выход` за миллион токенов.
 
 Сервер отвечает по протоколу OpenAI chat completions на `http://127.0.0.1:8412/v1`. Добавьте его
 в `~/.openclaw/openclaw.json`:

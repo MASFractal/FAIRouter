@@ -12,6 +12,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from fai_router.llm.client import OPENROUTER_URL
 from fai_router.router import FaiRouter
 
 # Порт по умолчанию отличается от порта ClawRouter (8402), чтобы не мешать соседям
@@ -104,20 +105,49 @@ def serve(router: FaiRouter, host: str = "127.0.0.1", port: int = DEFAULT_PORT) 
             router.save()
 
 
+def _parse_prices(items: list[str]) -> dict[str, tuple[float, float]]:
+    """Цены из командной строки: модель=вход:выход, за миллион токенов в валюте поставщика."""
+    prices = {}
+    for item in items:
+        try:
+            model, pair = item.split("=", 1)
+            inp, outp = pair.split(":", 1)
+            prices[model.strip()] = (float(inp), float(outp))
+        except ValueError as error:
+            raise SystemExit(f"Цена задается как модель=вход:выход, получено: {item}") from error
+    return prices
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сервер FAIRouter, совместимый с OpenAI chat completions")
-    parser.add_argument("--models", required=True, help="идентификаторы моделей OpenRouter через запятую")
-    parser.add_argument("--key", default=os.environ.get("OPENROUTER_API_KEY"), help="ключ OpenRouter")
+    parser.add_argument("--models", required=True, help="идентификаторы моделей через запятую")
+    parser.add_argument("--provider", choices=["fractalrouter", "openrouter"], default="fractalrouter",
+                        help="поставщик: FractalRouter (по умолчанию) или OpenRouter")
+    parser.add_argument("--base-url", default=None,
+                        help="адрес любого поставщика по протоколу OpenAI, вида https://host/v1")
+    parser.add_argument("--key", default=os.environ.get("FRACTALROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY"),
+                        help="ключ поставщика; по умолчанию FRACTALROUTER_API_KEY либо OPENROUTER_API_KEY")
+    parser.add_argument("--price", action="append", default=[], metavar="МОДЕЛЬ=ВХОД:ВЫХОД",
+                        help="цена модели за миллион токенов в валюте поставщика; без нее цена берется из его каталога")
     parser.add_argument("--db", default="fai-router.db", help="файл весов и журнала")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-measure", action="store_true", help="не замерять ответы судьей")
     args = parser.parse_args()
     if not args.key:
-        parser.error("нужен ключ: --key или переменная OPENROUTER_API_KEY")
+        parser.error("нужен ключ: --key либо переменная FRACTALROUTER_API_KEY или OPENROUTER_API_KEY")
 
-    router = FaiRouter.from_openrouter(args.key, [m.strip() for m in args.models.split(",") if m.strip()],
-                                       database_path=args.db, measure=not args.no_measure)
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    prices = _parse_prices(args.price)
+    if args.base_url:
+        router = FaiRouter.from_openai_compatible(args.base_url, args.key, models, database_path=args.db,
+                                                  prices=prices, measure=not args.no_measure)
+    elif args.provider == "openrouter":
+        router = FaiRouter.from_openai_compatible(OPENROUTER_URL, args.key, models, database_path=args.db,
+                                                  prices=prices, measure=not args.no_measure)
+    else:
+        router = FaiRouter.from_fractalrouter(args.key, models, database_path=args.db,
+                                              prices=prices, measure=not args.no_measure)
     serve(router, args.host, args.port)
 
 

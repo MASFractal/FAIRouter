@@ -1,5 +1,9 @@
-"""Каталог моделей: цены, размеры окна и возможности берутся у OpenRouter. Скорость поставщик
-не публикует, поэтому число токенов в секунду задает вызывающий."""
+"""Каталог моделей: цены, размеры окна и возможности берутся у поставщика, у FractalRouter или
+OpenRouter. Скорость поставщики не публикуют, поэтому число токенов в секунду задает вызывающий.
+
+Цены хранятся в валюте поставщика за миллион токенов: у OpenRouter доллары, у FractalRouter
+рубли. Для выбора важны только отношения цен кандидатов между собой, поэтому валюта роли не
+играет, лишь бы все кандидаты одного роутера были из одного каталога."""
 
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ if TYPE_CHECKING:
     from fai_router.benchmarks import BenchmarkSnapshot
 
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
+FRACTALROUTER_MODELS = "https://api.fractalrouter.ru/v1/models"
 
 
 @dataclass(frozen=True)
@@ -34,9 +39,16 @@ DEFAULT_TOKENS_PER_SECOND = 50.0
 
 
 def fetch(timeout: float = 60.0) -> list[ModelInfo]:
-    """Загружает каталог у поставщика, ключ не нужен."""
+    """Загружает каталог OpenRouter, ключ не нужен."""
     with urllib.request.urlopen(OPENROUTER_MODELS, timeout=timeout) as response:
         return parse(response.read().decode("utf-8"))
+
+
+def fetch_fractalrouter(api_key: str, timeout: float = 60.0) -> list[ModelInfo]:
+    """Загружает каталог FractalRouter; он отдается только по ключу. Цены в рублях."""
+    request = urllib.request.Request(FRACTALROUTER_MODELS, headers={"Authorization": f"Bearer {api_key}"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return parse_fractalrouter(response.read().decode("utf-8"))
 
 
 def load(path: str) -> list[ModelInfo]:
@@ -97,6 +109,40 @@ def parse(text: str) -> list[ModelInfo]:
             capabilities=_capabilities(item, architecture),
         ))
     return models
+
+
+def parse_fractalrouter(text: str) -> list[ModelInfo]:
+    """Каталог FractalRouter: цены уже за миллион токенов, в рублях. Предел ответа каталог не
+    сообщает, поэтому ограничения по объему у кандидата нет."""
+    payload = json.loads(text)
+    items = payload.get("data", []) if isinstance(payload, dict) else payload
+    models = []
+    for item in items:
+        pricing = item.get("pricing") or {}
+        modalities = item.get("modalities") or []
+        # Умение вызывать инструменты каталог не сообщает; считаем, что умеют все, иначе запрос
+        # с required=Capability.TOOLS не нашел бы ни одного кандидата
+        capabilities = Capability.CODE | Capability.FORMULAS | Capability.TOOLS
+        if "vision" in modalities or "image" in modalities:
+            capabilities |= Capability.VISION
+        models.append(ModelInfo(
+            id=item.get("id", ""),
+            title=item.get("name") or item.get("id", ""),
+            dollars_per_million_input=_number(pricing.get("prompt_rub_per_1m")),
+            dollars_per_million_output=_number(pricing.get("completion_rub_per_1m")),
+            context_tokens=int(item.get("context_length") or 0),
+            max_answer_tokens=int(item.get("max_completion_tokens") or 0),
+            capabilities=capabilities,
+        ))
+    return models
+
+
+def _number(value: Any) -> float:
+    # Цены приходят строками, иногда с запятой вместо точки
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _per_million(value: Any) -> float:

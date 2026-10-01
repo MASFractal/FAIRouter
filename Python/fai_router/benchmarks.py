@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Iterable
 
 _SEPARATORS = re.compile(r"[().,\s]+")
@@ -110,3 +111,28 @@ def find(openrouter_id: str, entries: Iterable[BenchmarkEntry]) -> BenchmarkEntr
 def slug(name: str) -> str:
     """Часть ключа серии из названия замера: «Finance/Investing» становится «finance-investing»."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+# Где искать снимок, если его не назвали: в комплекте пакета, затем в каталоге data репозитория
+_DEFAULT_PATHS = (
+    Path(__file__).resolve().parent / "data" / "benchmark-snapshot.json",
+    Path(__file__).resolve().parents[2] / "data" / "benchmark-snapshot.json",
+)
+
+
+def default_snapshot() -> BenchmarkSnapshot | None:
+    """Снимок из комплекта: data/benchmark-snapshot.json в пакете либо в репозитории. None,
+    если файла нет ни там, ни там, и тогда кандидаты стартуют со случайных весов."""
+    for path in _DEFAULT_PATHS:
+        if path.is_file():
+            return BenchmarkSnapshot.load(str(path))
+    return None
+
+
+def resolve(source: "BenchmarkSnapshot | str | None") -> BenchmarkSnapshot | None:
+    """Снимок по тому, что передали: сам снимок, путь к файлу или None для снимка из комплекта."""
+    if source is None:
+        return default_snapshot()
+    if isinstance(source, str):
+        return BenchmarkSnapshot.load(source)
+    return source

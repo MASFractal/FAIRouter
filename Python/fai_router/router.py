@@ -3,15 +3,16 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from fai_router import env
 from fai_router.content_review import ContentReview
 from fai_router.diff_spec import DiffSpec
 from fai_router.enums import Capability, FeedbackType
 from fai_router.judge import Judge
-from fai_router.llm.client import OpenRouterClient
+from fai_router.llm.client import FRACTALROUTER_URL, OPENROUTER_URL, OpenRouterClient
 from fai_router.llm.content_judge import ContentJudge
 from fai_router.persistence import SqliteTraceStore, SqliteWeightsStore
 from fai_router.routed_element import RoutedElement
@@ -21,7 +22,15 @@ from fai_router.specifications import Specifications
 from fai_router.tracking import Feedback, Tracert
 from fai_router.training import JudgeTrainer, RouterTrainer
 
+if TYPE_CHECKING:
+    from fai_router.benchmarks import BenchmarkSnapshot
+
+log = logging.getLogger("fai_router")
+
 Messages = list[dict[str, str]]
+
+# Цены кандидата за миллион токенов в валюте поставщика: (вход, выход)
+Prices = dict[str, tuple[float, float]]
 
 
 @dataclass
@@ -88,6 +97,27 @@ class FaiRouter:
             self.load()
 
     @classmethod
+    def from_fractalrouter(
+        cls,
+        api_key: str,
+        model_ids: Iterable[str],
+        database_path: str | None = None,
+        prices: Prices | None = None,
+        judge_model: str = "openai/gpt-4o-mini",
+        base_url: str = FRACTALROUTER_URL,
+        **kwargs,
+    ) -> "FaiRouter":
+        """Роутер над моделями FractalRouter (fractalrouter.ru): цены и возможности из его
+        каталога, ответы кандидатов и работа судьи через него же, одним ключом. Цены в рублях за
+        миллион токенов; модели, которой в каталоге нет, цену задает словарь prices. Остальные
+        доводы те же, что у from_openai_compatible."""
+        from fai_router import catalog
+
+        return cls.from_openai_compatible(
+            base_url, api_key, model_ids, database_path=database_path, prices=prices,
+            judge_model=judge_model, catalog_fetch=lambda: catalog.fetch_fractalrouter(api_key), **kwargs)
+
+    @classmethod
     def from_openrouter(
         cls,
         api_key: str,
@@ -99,25 +129,76 @@ class FaiRouter:
     ) -> "FaiRouter":
         """Роутер над моделями OpenRouter: цены и возможности из каталога, ответы через него же.
         Скорость поставщик не публикует, ее можно передать словарем по идентификаторам."""
+        return cls.from_openai_compatible(OPENROUTER_URL, api_key, model_ids, database_path=database_path,
+                                          judge_model=judge_model, tokens_per_second=tokens_per_second,
+                                          **kwargs)
+
+    @classmethod
+    def from_openai_compatible(
+        cls,
+        base_url: str,
+        api_key: str,
+        model_ids: Iterable[str],
+        database_path: str | None = None,
+        prices: Prices | None = None,
+        judge_model: str = "openai/gpt-4o-mini",
+        tokens_per_second: dict[str, float] | None = None,
+        benchmarks: "BenchmarkSnapshot | str | None" = None,
+        timeout: float = 120.0,
+        catalog_fetch: "Callable[[], Iterable[catalog.ModelInfo]] | None" = None,
+        **kwargs,
+    ) -> "FaiRouter":
+        """Роутер над любым поставщиком по протоколу OpenAI chat completions: base_url это адрес
+        вида https://host/v1, ключ уходит заголовком Bearer. Через того же поставщика и тем же
+        ключом работает модель-судья judge_model.
+
+        Цены кандидатов берутся из prices, (вход, выход) за миллион токенов в валюте поставщика;
+        модели, которых там нет, ищутся в каталоге catalog_fetch (по умолчанию каталог OpenRouter)
+        по идентификатору. Модель без цены ни там, ни там это ошибка: без цены роутеру нечего
+        взвешивать.
+
+        Начальные веса кандидатов берутся из снимка внешних замеров (benchmarks: снимок, путь к
+        нему или None для снимка из комплекта), поэтому роутер небесполезен с первого хода, а
+        обучение на отзывах его уточняет. Пустая база на старте в порядке: веса в нее попадают
+        при save(), ходы и отзывы при ask() и feedback()."""
+        from fai_router import benchmarks as benchmarks_module
         from fai_router import catalog
 
-        known = {model.id: model for model in catalog.fetch()}
+        snapshot = benchmarks_module.resolve(benchmarks)
+        if snapshot is None:
+            log.warning("Снимок замеров не найден: кандидаты стартуют со случайных весов, "
+                        "пока не накопятся отзывы.")
+        prices = prices or {}
         speeds = tokens_per_second or {}
+        model_ids = list(model_ids)
+        known: dict[str, catalog.ModelInfo] = {}
+        if any(model_id not in prices for model_id in model_ids):
+            known = {model.id: model for model in (catalog_fetch or catalog.fetch)()}
         candidates = []
         for model_id in model_ids:
-            if model_id not in known:
-                raise ValueError(f"Модели {model_id} нет в каталоге OpenRouter.")
-            candidates.append(catalog.create_element(known[model_id], speeds.get(model_id)))
+            if model_id in prices:
+                inp, outp = prices[model_id]
+                info = catalog.ModelInfo(model_id, model_id, float(inp), float(outp), 0, 0,
+                                         Capability.CODE | Capability.FORMULAS)
+            elif model_id in known:
+                info = known[model_id]
+            else:
+                raise ValueError(
+                    f"У модели {model_id} нет цены в prices, и в каталоге поставщика ее нет. "
+                    f"Задайте цену: prices={{\"{model_id}\": (вход, выход)}} за миллион токенов.")
+            candidates.append(catalog.create_element(info, speeds.get(model_id), snapshot))
 
         clients: dict[str, OpenRouterClient] = {}
 
         def execute(candidate: RoutedElement, messages: Messages) -> Completion:
-            client = clients.setdefault(candidate.name, OpenRouterClient(api_key, candidate.name))
+            client = clients.setdefault(
+                candidate.name, OpenRouterClient(api_key, candidate.name, timeout=timeout, base_url=base_url))
             data = client.complete_full(messages)
             prompt_tokens, completion_tokens = OpenRouterClient.usage(data)
             return Completion(data["choices"][0]["message"]["content"] or "", prompt_tokens, completion_tokens)
 
-        return cls(candidates, execute, database_path, llm=OpenRouterClient(api_key, judge_model), **kwargs)
+        judge = OpenRouterClient(api_key, judge_model, timeout=timeout, base_url=base_url)
+        return cls(candidates, execute, database_path, llm=judge, **kwargs)
 
     def ask(self, prompt: str, required: Capability = Capability.NONE) -> RouterAnswer:
         """Один ход по тексту запроса."""
@@ -141,11 +222,7 @@ class FaiRouter:
                               completion_tokens=completion.completion_tokens)
 
         if self.measure and completion.text.strip():
-            answer.actual = self._measurer.get_specifications(completion.text)
-            answer.content = self.content_judge.review(prompt, trace.requested_spec, completion.text)
-            answer.score = self.judge.rate(trace, trace.requested_spec, answer.actual)
-            answer.critic = Judge.criticize(trace.requested_spec, answer.actual, answer.content)
-            answer.assessment = Judge.assess(answer.critic, answer.content)
+            self._measure(answer, prompt)
 
         if self.traces is not None:
             answer.round_id = self.traces.append(trace, trace.requested_spec, answer.actual, prompt)
@@ -154,8 +231,24 @@ class FaiRouter:
                 self.traces.set_feedback(answer.round_id, Feedback(FeedbackType.AUTO, answer.assessment))
         return answer
 
+    def _measure(self, answer: RouterAnswer, prompt: str) -> None:
+        """Замер и оценка ответа. Сбой судьи (сеть, поставщик) ход не роняет: исполнитель уже
+        ответил, и этот ответ дороже оценки. Ход без замера идет в журнал без автоотзыва."""
+        try:
+            answer.actual = self._measurer.get_specifications(answer.text)
+            answer.content = self.content_judge.review(prompt, answer.requested, answer.text)
+            answer.score = self.judge.rate(answer.trace, answer.requested, answer.actual)
+            answer.critic = Judge.criticize(answer.requested, answer.actual, answer.content)
+            answer.assessment = Judge.assess(answer.critic, answer.content)
+        except Exception as error:  # noqa: BLE001 - любой сбой замера, ответ отдается без оценки
+            log.warning("Ответ получен, но замерить его не удалось: %s", error)
+
     def feedback(self, round_id: int, score: float, human: bool = True) -> None:
-        """Отзыв на ход: единица означает «нравится», ноль означает «нет»."""
+        """Отзыв человека на ход: число от 0 до 1. Единица означает отличный ответ, ноль
+        никуда не годный, 0,5 так себе. Отзыв перезаписывает автоотзыв судьи, на нем учатся и
+        роутер, и судья. Отзывом вне диапазона роутер не кормится."""
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(f"Отзыв {score} вне диапазона: нужно число от 0 (плохо) до 1 (отлично).")
         self._require_journal().set_feedback(
             round_id, Feedback(FeedbackType.HUMAN if human else FeedbackType.AUTO, score))
 

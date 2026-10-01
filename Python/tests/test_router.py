@@ -3,6 +3,7 @@ import threading
 import urllib.request
 
 import numpy as np
+import pytest
 
 from fai_router import FaiRouter, Settings
 from fai_router.enums import Capability, Style
@@ -152,3 +153,92 @@ def test_judge_learns_only_from_human_feedback(tmp_path):
     router.feedback(1, 0.0)
     router.train()
     assert not np.array_equal(before, router.judge.transformer_w)
+
+
+def test_from_openai_compatible_builds_candidates_without_catalog(monkeypatch):
+    """Цены заданы руками: каталог OpenRouter не нужен, сеть не трогается, а снимок замеров
+    дает начальные веса. Исполнитель и судья ходят на base_url поставщика."""
+    from fai_router import catalog
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: (_ for _ in ()).throw(AssertionError("сеть не нужна")))
+    router = FaiRouter.from_openai_compatible(
+        "https://example.test/v1", "ключ", ["anthropic/claude-opus-4.7", "my/own-model"],
+        prices={"anthropic/claude-opus-4.7": (15.0, 75.0), "my/own-model": (1.0, 2.0)},
+        tokens_per_second={"my/own-model": 120}, measure=False)
+
+    names = [c.name for c in router.candidates]
+    assert names == ["anthropic/claude-opus-4.7", "my/own-model"]
+    assert router.candidates[1].dpmt_inp == 1.0 and router.candidates[1].dpmt_outp == 2.0
+    assert router.candidates[1].tps == 120
+    assert Settings.llm.base_url == "https://example.test/v1"
+    assert Settings.llm.model == "openai/gpt-4o-mini"
+    # Начальный вектор известной модели пришел из снимка замеров, а не из случайного Ксавье
+    from fai_router.benchmarks import default_snapshot
+    from fai_router.training import benchmark_prior
+    expected = benchmark_prior.vector(default_snapshot(), "anthropic/claude-opus-4.7")
+    assert expected is not None
+    assert np.array_equal(router.candidates[0].ideal_match_vector, expected)
+
+
+def test_from_fractalrouter_uses_its_own_catalog_and_address(monkeypatch):
+    """FractalRouter: каталог свой, по ключу, в рублях; OpenRouter не нужен вовсе."""
+    from fai_router import catalog
+    from fai_router.llm.client import FRACTALROUTER_URL
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: (_ for _ in ()).throw(AssertionError("OpenRouter не нужен")))
+    seen = []
+
+    def fetch_fractalrouter(api_key, timeout=60.0):
+        seen.append(api_key)
+        return catalog.parse_fractalrouter(json.dumps({"data": [
+            {"id": "anthropic/claude-sonnet-5", "owned_by": "Anthropic", "context_length": 1000000,
+             "modalities": ["text", "vision"],
+             "pricing": {"prompt_rub_per_1m": "213.55", "completion_rub_per_1m": "1067,74"}},
+            {"id": "openai/gpt-4o-mini", "owned_by": "OpenAI", "context_length": 128000,
+             "modalities": ["text"], "pricing": {"prompt_rub_per_1m": "12", "completion_rub_per_1m": "48"}},
+        ]}))
+
+    monkeypatch.setattr(catalog, "fetch_fractalrouter", fetch_fractalrouter)
+    router = FaiRouter.from_fractalrouter("rtr_live_x", ["anthropic/claude-sonnet-5", "openai/gpt-4o-mini"],
+                                          measure=False)
+    assert seen == ["rtr_live_x"]
+    assert Settings.llm.base_url == FRACTALROUTER_URL and Settings.llm.api_key == "rtr_live_x"
+    sonnet, mini = router.candidates
+    assert (sonnet.dpmt_inp, sonnet.dpmt_outp) == (213.55, 1067.74)
+    assert sonnet.capabilities & Capability.VISION and not (mini.capabilities & Capability.VISION)
+    assert sonnet.context_limit == 0
+
+
+def test_unknown_model_without_price_is_an_error(monkeypatch):
+    from fai_router import catalog
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: [])
+    with pytest.raises(ValueError, match="нет цены"):
+        FaiRouter.from_openai_compatible("https://example.test/v1", "ключ", ["nobody/knows"], measure=False)
+
+
+def test_measurement_failure_keeps_the_answer(tmp_path):
+    """Судья отвалился по сети: ответ исполнителя уже получен и возвращается без оценки, ход
+    записан в журнал без автоотзыва."""
+    router, _ = make_router(tmp_path)
+
+    class BrokenLlm(FakeLlm):
+        def complete(self, messages, schema=None, schema_name="answer", **kwargs):
+            if schema_name != "input_specifications":
+                raise ConnectionError("Remote end closed connection without response")
+            return super().complete(messages, schema, schema_name, **kwargs)
+
+    Settings.llm = BrokenLlm()
+    answer = router.ask("Напиши научный обзор методов кластеризации на 1500 знаков.")
+    assert answer.text.startswith("# Ответ от")
+    assert answer.score is None and answer.actual is None and answer.assessment is None
+    assert answer.round_id == 1
+    assert router.traces.count() == (1, 0)
+
+
+def test_feedback_must_be_between_zero_and_one(tmp_path):
+    router, _ = make_router(tmp_path)
+    router.ask("Напиши научный обзор методов кластеризации на 1500 знаков.")
+    router.feedback(1, 0.2)
+    with pytest.raises(ValueError, match="от 0"):
+        router.feedback(1, 5)

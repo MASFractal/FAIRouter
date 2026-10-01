@@ -7,12 +7,16 @@
 ## Установка
 
 Нужен Python 3.11 и выше. Зависимость одна: `numpy` для векторов и матриц. Обращения к
-OpenRouter идут через встроенный `urllib`, база на встроенном `sqlite3`.
+поставщику моделей идут через встроенный `urllib`, база на встроенном `sqlite3`.
 
 ```bash
 pip install -e ".[test]"
 pytest
 ```
+
+Свой файл с вызовом роутера кладется в этот каталог, `Python`, рядом с пакетом `fai_router`: иначе
+`import fai_router` пакет не найдет. После `pip install -e .` ограничение снимается, и файл может
+лежать где угодно.
 
 ## Отличия от версии на C#
 
@@ -41,10 +45,10 @@ fai_router/
 ├── text_metrics.py     замер структуры текста без модели
 ├── services.py         извлечение задания и замер ответа
 ├── env.py              ход роутинга, сэмплирование, выбор с планкой, отсев, запасной вариант
-├── llm/                клиент OpenRouter, распознавание задания и стиля, судья содержания
+├── llm/                клиент поставщика (FractalRouter, OpenRouter), распознавание задания и стиля, судья содержания
 ├── training/           обучение судьи и роутера, калибровка, начальные веса из замера и из снимка
 ├── persistence/        веса и журнал ходов в SQLite
-├── catalog.py          цены и возможности моделей у поставщика
+├── catalog.py          цены и возможности моделей из каталога FractalRouter или OpenRouter
 ├── content_review.py   оценка содержания: критерии, проверяемые утверждения, замечания
 ├── benchmarks.py       снимок внешних замеров и сопоставление имен
 └── data/               профили задач по сериям замеров, общие с версией на C#
@@ -58,13 +62,26 @@ fai_router/
 ```python
 from fai_router import FaiRouter
 
-router = FaiRouter.from_openrouter("ключ", ["google/gemini-2.5-flash", "openai/gpt-4.1-mini"],
-                                   database_path="fai-router.db")
+router = FaiRouter.from_fractalrouter("rtr_live_...", ["google/gemini-2.5-flash", "openai/gpt-4.1-mini"],
+                                      database_path="fai-router.db")
 answer = router.ask("Напиши научный обзор на 1500 знаков")
-router.feedback(answer.round_id, 1.0)
+router.feedback(answer.round_id, 1.0)   # отзыв от 0 (плохо) до 1 (отлично); 0.2 означает плохой ответ
 router.train(epochs=10)
 router.save()
 ```
+
+Три фабрики: `from_fractalrouter` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к
+моделям с оплатой в рублях, не путать с FractalGPT), `from_openrouter` для OpenRouter и
+`from_openai_compatible(base_url, ...)` для любого сервера по протоколу OpenAI chat completions.
+Через одного поставщика и один ключ идут и ответы кандидатов, и работа судьи (`judge_model`). Цены
+берутся из каталога поставщика по идентификатору модели, у FractalRouter в рублях, у OpenRouter в
+долларах; для выбора важны только отношения цен кандидатов. Модели, которой в каталоге нет, цену
+задает довод `prices={"имя": (вход, выход)}` за миллион токенов. Начальные веса кандидатов
+приходят из снимка замеров `data/benchmark-snapshot.json`, пустая база на старте в порядке.
+
+Клиент `OpenRouterClient` принимает `base_url` и повторяет запрос при обрыве соединения, таймауте
+и ответах 429 и 5xx; после исчерпания повторов поднимает `LlmRequestError` с именем поставщика и
+модели. Сбой судьи ход не роняет: ответ исполнителя возвращается без оценки.
 
 Исполнителя можно задать своего: функция получает кандидата и сообщения диалога и возвращает
 текст либо `Completion` с расходом токенов.
