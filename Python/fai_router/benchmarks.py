@@ -121,7 +121,7 @@ _DEFAULT_PATHS = (
 
 
 def default_snapshot() -> BenchmarkSnapshot | None:
-    """Снимок из комплекта: data/benchmark-snapshot.json в пакете либо в репозитории. None,
+    """Снимок из комплекта: fai_router/data/benchmark-snapshot.json в пакете. None,
     если файла нет ни там, ни там, и тогда кандидаты стартуют со случайных весов."""
     for path in _DEFAULT_PATHS:
         if path.is_file():

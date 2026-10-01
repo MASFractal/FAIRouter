@@ -101,6 +101,14 @@ router.Train(epochs: 10);
 router.Save();
 ```
 
+Модели можно не называть: тогда выбор идет среди популярных моделей из комплекта (54 модели с
+рейтингами и недорогие рабочие лошадки, ресурс `popular_models.json`, общий с пакетом на Python).
+Вместо списка принимаются наборы одним элементом: `[ModelCatalog.Popular]` и `[ModelCatalog.All]`
+(весь каталог поставщика). Профиль весов задается роутеру на все ходы (`weights: RouteWeights.Price`)
+либо отдельному ходу (`AskAsync(prompt, weights: RouteWeights.Quality)`); готовые профили `Quality`,
+`Balance` и `Price`, свои через `new RouteWeights(...)`. Таблица моделей и описание профилей есть в
+корневом README.
+
 Фабрики три: `FromFractalRouterAsync` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к моделям
 с оплатой в рублях, не путать с FractalGPT), `FromOpenRouterAsync` для OpenRouter и
 `FromOpenAiCompatibleAsync(baseUrl, ...)` для любого сервера по протоколу OpenAI chat completions.

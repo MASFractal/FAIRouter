@@ -11,13 +11,14 @@ from fai_router import env
 from fai_router.content_review import ContentReview
 from fai_router.diff_spec import DiffSpec
 from fai_router.enums import Capability, FeedbackType
+from fai_router import catalog as catalog_module
 from fai_router.judge import Judge
 from fai_router.llm.client import FRACTALROUTER_URL, OPENROUTER_URL, OpenRouterClient
 from fai_router.llm.content_judge import ContentJudge
 from fai_router.persistence import SqliteTraceStore, SqliteWeightsStore
 from fai_router.routed_element import RoutedElement
 from fai_router.services import SpecOutputService
-from fai_router.settings import Settings
+from fai_router.settings import RouteWeights, Settings
 from fai_router.specifications import Specifications
 from fai_router.tracking import Feedback, Tracert
 from fai_router.training import JudgeTrainer, RouterTrainer
@@ -77,8 +78,12 @@ class FaiRouter:
         measure: bool = True,
         llm: OpenRouterClient | None = None,
         content_judge: ContentJudge | None = None,
+        weights: "RouteWeights | str | None" = None,
     ):
         self.candidates = list(candidates)
+        # Профиль весов на все ходы: quality, balance, price либо свои RouteWeights; None означает
+        # веса из Settings. Ход может назвать свой профиль и перекрыть этот
+        self.route_weights = RouteWeights.profile(weights)
         self._execute = execute
         self.topk = topk
         # Оценка ответа по форме и содержанию стоит двух обращений к модели на ход; ее можно отключить
@@ -100,7 +105,7 @@ class FaiRouter:
     def from_fractalrouter(
         cls,
         api_key: str,
-        model_ids: Iterable[str],
+        model_ids: "str | Iterable[str]" = catalog_module.POPULAR,
         database_path: str | None = None,
         prices: Prices | None = None,
         judge_model: str = "openai/gpt-4o-mini",
@@ -108,9 +113,10 @@ class FaiRouter:
         **kwargs,
     ) -> "FaiRouter":
         """Роутер над моделями FractalRouter (fractalrouter.ru): цены и возможности из его
-        каталога, ответы кандидатов и работа судьи через него же, одним ключом. Цены в рублях за
-        миллион токенов; модели, которой в каталоге нет, цену задает словарь prices. Остальные
-        доводы те же, что у from_openai_compatible."""
+        каталога, ответы кандидатов и работа судьи через него же, одним ключом. Модели: список
+        идентификаторов, «popular» (популярные из комплекта, по умолчанию) или «all» (весь каталог).
+        Цены в рублях за миллион токенов; модели, которой в каталоге нет, цену задает словарь
+        prices. Остальные доводы те же, что у from_openai_compatible."""
         from fai_router import catalog
 
         return cls.from_openai_compatible(
@@ -121,7 +127,7 @@ class FaiRouter:
     def from_openrouter(
         cls,
         api_key: str,
-        model_ids: Iterable[str],
+        model_ids: "str | Iterable[str]" = catalog_module.POPULAR,
         database_path: str | None = None,
         judge_model: str = "openai/gpt-4o-mini",
         tokens_per_second: dict[str, float] | None = None,
@@ -138,7 +144,7 @@ class FaiRouter:
         cls,
         base_url: str,
         api_key: str,
-        model_ids: Iterable[str],
+        model_ids: "str | Iterable[str]" = catalog_module.POPULAR,
         database_path: str | None = None,
         prices: Prices | None = None,
         judge_model: str = "openai/gpt-4o-mini",
@@ -151,6 +157,10 @@ class FaiRouter:
         """Роутер над любым поставщиком по протоколу OpenAI chat completions: base_url это адрес
         вида https://host/v1, ключ уходит заголовком Bearer. Через того же поставщика и тем же
         ключом работает модель-судья judge_model.
+
+        Модели задаются списком идентификаторов либо именем набора: «popular» это популярные из
+        комплекта (data/popular_models.json), которые есть в каталоге поставщика, «all» это весь его
+        каталог. Профиль весов weights (quality, balance, price) действует на все ходы.
 
         Цены кандидатов берутся из prices, (вход, выход) за миллион токенов в валюте поставщика;
         модели, которых там нет, ищутся в каталоге catalog_fetch (по умолчанию каталог OpenRouter)
@@ -170,10 +180,12 @@ class FaiRouter:
                         "пока не накопятся отзывы.")
         prices = prices or {}
         speeds = tokens_per_second or {}
-        model_ids = list(model_ids)
         known: dict[str, catalog.ModelInfo] = {}
-        if any(model_id not in prices for model_id in model_ids):
+        if isinstance(model_ids, str) or any(model_id not in prices for model_id in model_ids):
             known = {model.id: model for model in (catalog_fetch or catalog.fetch)()}
+        model_ids, strict = catalog.select(model_ids, known)
+        if not model_ids:
+            raise ValueError("Список моделей пуст: роутеру не из кого выбирать.")
         candidates = []
         for model_id in model_ids:
             if model_id in prices:
@@ -200,11 +212,14 @@ class FaiRouter:
         judge = OpenRouterClient(api_key, judge_model, timeout=timeout, base_url=base_url)
         return cls(candidates, execute, database_path, llm=judge, **kwargs)
 
-    def ask(self, prompt: str, required: Capability = Capability.NONE) -> RouterAnswer:
-        """Один ход по тексту запроса."""
-        return self.ask_messages([{"role": "user", "content": prompt}], required)
+    def ask(self, prompt: str, required: Capability = Capability.NONE,
+            weights: "RouteWeights | str | None" = None) -> RouterAnswer:
+        """Один ход по тексту запроса. Профиль весов на этот ход: quality, balance, price либо
+        свои RouteWeights; не задан, тогда профиль роутера."""
+        return self.ask_messages([{"role": "user", "content": prompt}], required, weights)
 
-    def ask_messages(self, messages: Messages, required: Capability = Capability.NONE) -> RouterAnswer:
+    def ask_messages(self, messages: Messages, required: Capability = Capability.NONE,
+                     weights: "RouteWeights | str | None" = None) -> RouterAnswer:
         """Один ход по диалогу: задача распознается по последнему сообщению пользователя, а
         исполнителю уходит весь диалог целиком."""
         prompt = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -212,7 +227,8 @@ class FaiRouter:
             raise ValueError("В диалоге нет сообщения пользователя, задачу распознать не из чего.")
 
         turns = sum(1 for m in messages if m.get("role") == "user")
-        trace = env.route(prompt, self.candidates, self.topk, required, turns=turns)
+        trace = env.route(prompt, self.candidates, self.topk, required,
+                          weights=RouteWeights.profile(weights) or self.route_weights, turns=turns)
         completion = env.execute(trace, lambda candidate: self._execute(candidate, messages))
         if isinstance(completion, str):
             completion = Completion(completion)

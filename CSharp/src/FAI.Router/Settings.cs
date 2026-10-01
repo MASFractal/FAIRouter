@@ -21,7 +21,38 @@ namespace FAI.Router;
 /// <param name="WC">Доля важности цены</param>
 /// <param name="Wt">Доля важности времени</param>
 /// <param name="TemperatureScale">Множитель температуры выбора; ноль делает выбор жадным</param>
-public readonly record struct RouteWeights(double WQ, double WC, double Wt, double TemperatureScale);
+public readonly record struct RouteWeights(double WQ, double WC, double Wt, double TemperatureScale)
+{
+    /// <summary>
+    /// Профиль «качество прежде всего»: 0,8 / 0,10 / 0,10. По замеру router-eval обходит по качеству
+    /// все стратегии, включая всегда самую дорогую модель.
+    /// </summary>
+    public static RouteWeights Quality => new(0.8, 0.10, 0.10, Settings.TemperatureScale);
+
+    /// <summary>
+    /// Профиль «баланс»: 0,5 / 0,25 / 0,25, веса по умолчанию. Половина решения за качеством, по
+    /// четверти за ценой и временем.
+    /// </summary>
+    public static RouteWeights Balance => new(0.5, 0.25, 0.25, Settings.TemperatureScale);
+
+    /// <summary>
+    /// Профиль «экономный»: 0,3 / 0,60 / 0,10. По замеру router-eval дает качество выше, чем всегда
+    /// самая дешевая модель, почти по той же цене.
+    /// </summary>
+    public static RouteWeights Price => new(0.3, 0.60, 0.10, Settings.TemperatureScale);
+
+    /// <summary>
+    /// Профиль по имени: quality, balance или price. То же, что строковые профили в версии на Python.
+    /// </summary>
+    /// <param name="name">Имя профиля без учета регистра</param>
+    public static RouteWeights Profile(string name) => name.Trim().ToLowerInvariant() switch
+    {
+        "quality" => Quality,
+        "balance" or "balanced" => Balance,
+        "price" or "cheap" or "economy" => Price,
+        _ => throw new ArgumentException($"Неизвестный профиль весов «{name}»: есть quality, balance и price.", nameof(name)),
+    };
+}
 
 /// <summary>
 /// Планка достаточности качества на один выбор: какой вероятности лайка должен достигать ответ.

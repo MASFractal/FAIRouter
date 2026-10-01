@@ -242,3 +242,51 @@ def test_feedback_must_be_between_zero_and_one(tmp_path):
     router.feedback(1, 0.2)
     with pytest.raises(ValueError, match="от 0"):
         router.feedback(1, 5)
+
+
+def test_named_model_sets_and_profiles(monkeypatch):
+    """«popular» берет популярные из комплекта, которые есть в каталоге, «all» весь каталог; список
+    требует цены у каждого. Профиль весов именуется словом и действует на ход."""
+    from fai_router import catalog
+    from fai_router.settings import RouteWeights
+
+    popular = catalog.popular_models()
+    assert 40 <= len(popular) <= 80 and "openai/gpt-4o-mini" in popular
+
+    fake = [catalog.ModelInfo(popular[0], "a", 1, 2, 0, 0, Capability.CODE),
+            catalog.ModelInfo("vendor/unknown", "b", 3, 4, 0, 0, Capability.CODE),
+            catalog.ModelInfo("vendor/broken", "c", -1, -1, 0, 0, Capability.CODE)]
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: fake)
+
+    by_popular = FaiRouter.from_openai_compatible("https://example.test/v1", "k", "popular", measure=False)
+    assert [c.name for c in by_popular.candidates] == [popular[0]]
+
+    by_all = FaiRouter.from_openai_compatible("https://example.test/v1", "k", "all", measure=False, weights="price")
+    assert sorted(c.name for c in by_all.candidates) == sorted([popular[0], "vendor/unknown"])
+    assert by_all.route_weights == RouteWeights.price()
+
+    with pytest.raises(ValueError, match="нет цены"):
+        FaiRouter.from_openai_compatible("https://example.test/v1", "k", ["vendor/missing"], measure=False)
+    with pytest.raises(ValueError, match="профиль"):
+        FaiRouter.from_openai_compatible("https://example.test/v1", "k", "all", measure=False, weights="fastest")
+
+    assert RouteWeights.profile("quality").WQ == 0.8 and RouteWeights.profile("balance").WC == 0.25
+    assert RouteWeights.profile(None) is None
+
+
+def test_profile_reaches_the_route(tmp_path, monkeypatch):
+    from fai_router import env
+    from fai_router.settings import RouteWeights
+
+    router, _ = make_router(tmp_path, measure=False)
+    seen = []
+    original = env.route
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("weights"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(env, "route", spy)
+    router.ask("Напиши научный обзор на 1500 знаков.")
+    router.ask("Напиши научный обзор на 1500 знаков.", weights="quality")
+    assert seen == [None, RouteWeights.quality()]

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import urllib.request
+import logging
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from fai_router.enums import Capability
@@ -18,6 +20,8 @@ from fai_router.services import InputFeaturesService
 
 if TYPE_CHECKING:
     from fai_router.benchmarks import BenchmarkSnapshot
+
+log = logging.getLogger("fai_router")
 
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 FRACTALROUTER_MODELS = "https://api.fractalrouter.ru/v1/models"
@@ -37,6 +41,12 @@ class ModelInfo:
 # Скорость модели, о которой ничего не известно, токенов в секунду
 DEFAULT_TOKENS_PER_SECOND = 50.0
 
+# Именованные наборы моделей вместо списка идентификаторов: весь каталог поставщика либо
+# список популярных из комплекта (data/popular_models.json)
+ALL = "all"
+POPULAR = "popular"
+POPULAR_MODELS_PATH = Path(__file__).resolve().parent / "data" / "popular_models.json"
+
 
 def fetch(timeout: float = 60.0) -> list[ModelInfo]:
     """Загружает каталог OpenRouter, ключ не нужен."""
@@ -49,6 +59,39 @@ def fetch_fractalrouter(api_key: str, timeout: float = 60.0) -> list[ModelInfo]:
     request = urllib.request.Request(FRACTALROUTER_MODELS, headers={"Authorization": f"Bearer {api_key}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return parse_fractalrouter(response.read().decode("utf-8"))
+
+
+def popular_models() -> list[str]:
+    """Идентификаторы популярных моделей из комплекта: модели с внешними рейтингами в снимке
+    замеров и недорогие рабочие лошадки. Это выбор по умолчанию, когда модели не названы."""
+    with open(POPULAR_MODELS_PATH, encoding="utf-8") as file:
+        return [item["id"] for item in json.load(file)["models"]]
+
+
+def select(model_ids: "str | Iterable[str]", known: dict[str, ModelInfo]) -> tuple[list[str], bool]:
+    """Список идентификаторов по тому, что передали: строка «all» дает весь каталог поставщика,
+    «popular» дает популярные из комплекта, которые есть в каталоге, список берется как есть.
+    Второе значение говорит, обязан ли каждый идентификатор найтись: у именованного набора
+    отсутствующие модели молча пропускаются, у списка их отсутствие это ошибка."""
+    if isinstance(model_ids, str):
+        name = model_ids.strip().lower()
+        if name == ALL:
+            return [model_id for model_id, model in known.items() if _priced(model)], False
+        if name == POPULAR:
+            wanted = popular_models()
+            found = [model_id for model_id in wanted if model_id in known]
+            if len(found) < len(wanted):
+                log.info("Популярных моделей в каталоге поставщика %d из %d.", len(found), len(wanted))
+            if not found:
+                raise ValueError("Ни одной популярной модели в каталоге поставщика нет: назовите модели списком.")
+            return found, False
+        raise ValueError(f"Неизвестный набор моделей «{model_ids}»: есть all и popular, либо список идентификаторов.")
+    return list(model_ids), True
+
+
+def _priced(model: ModelInfo) -> bool:
+    # Каталог OpenRouter содержит служебные записи с отрицательной ценой; набору «все» они не нужны
+    return model.dollars_per_million_input >= 0 and model.dollars_per_million_output >= 0
 
 
 def load(path: str) -> list[ModelInfo]:

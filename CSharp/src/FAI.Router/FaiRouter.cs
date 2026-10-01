@@ -54,6 +54,7 @@ public class FaiRouter
     private readonly Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> _execute;
     private readonly int _topk;
     private readonly bool _measure;
+    private readonly RouteWeights? _weights;
     private readonly SpecOutputService _measurer = new();
     private readonly ContentJudge _contentJudge;
     private readonly RouterTrainer _routerTrainer = new(learningRate: 0.05f);
@@ -88,14 +89,17 @@ public class FaiRouter
     /// <param name="topk">Сколько лучших участвуют в выборе</param>
     /// <param name="measure">Оценивать ли ответ по форме и содержанию; стоит двух обращений к модели на ход</param>
     /// <param name="contentJudge">Свой судья содержания, например с проверкой фактов по вебу; не задан, тогда общий</param>
+    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     public FaiRouter(
         IEnumerable<BaseRoutedElement> candidates,
         Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> execute,
         string? databasePath = null,
         int topk = 5,
         bool measure = true,
-        ContentJudge? contentJudge = null)
+        ContentJudge? contentJudge = null,
+        RouteWeights? weights = null)
     {
+        _weights = weights;
         Candidates = [.. candidates];
         _execute = execute;
         _topk = topk;
@@ -121,7 +125,7 @@ public class FaiRouter
     /// кандидатов и работа судьи через него же, одним ключом. То же, что from_fractalrouter в версии на Python.
     /// </summary>
     /// <param name="apiKey">Ключ FractalRouter вида rtr_live_...</param>
-    /// <param name="modelIds">Идентификаторы моделей из каталога, например anthropic/claude-sonnet-5</param>
+    /// <param name="modelIds">Идентификаторы моделей из каталога, например anthropic/claude-sonnet-5; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
     /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
     /// <param name="prices">Цены в рублях за миллион токенов для моделей, которых нет в каталоге</param>
     /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
@@ -131,10 +135,11 @@ public class FaiRouter
     /// <param name="topk">Сколько лучших участвуют в выборе</param>
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
+    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromFractalRouterAsync(
         string apiKey,
-        IEnumerable<string> modelIds,
+        IEnumerable<string>? modelIds = null,
         string? databasePath = null,
         IReadOnlyDictionary<string, Price>? prices = null,
         string judgeModel = DefaultJudgeModel,
@@ -144,16 +149,17 @@ public class FaiRouter
         int topk = 5,
         bool measure = true,
         ContentJudge? contentJudge = null,
+        RouteWeights? weights = null,
         CancellationToken cancellationToken = default) =>
         FromOpenAiCompatibleAsync(baseUrl, apiKey, modelIds, databasePath, prices, judgeModel, tokensPerSecond, benchmarks,
-            token => ModelCatalog.FetchFractalRouterAsync(apiKey, cancellationToken: token), topk, measure, contentJudge, cancellationToken);
+            token => ModelCatalog.FetchFractalRouterAsync(apiKey, cancellationToken: token), topk, measure, contentJudge, weights, cancellationToken);
 
     /// <summary>
     /// Роутер над моделями OpenRouter: цены и возможности из его каталога, ответы через него же.
     /// То же, что from_openrouter в версии на Python.
     /// </summary>
     /// <param name="apiKey">Ключ OpenRouter</param>
-    /// <param name="modelIds">Идентификаторы моделей из каталога</param>
+    /// <param name="modelIds">Идентификаторы моделей из каталога; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
     /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
     /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
     /// <param name="tokensPerSecond">Скорость по идентификаторам; каталог ее не сообщает</param>
@@ -162,10 +168,11 @@ public class FaiRouter
     /// <param name="topk">Сколько лучших участвуют в выборе</param>
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
+    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromOpenRouterAsync(
         string apiKey,
-        IEnumerable<string> modelIds,
+        IEnumerable<string>? modelIds = null,
         string? databasePath = null,
         string judgeModel = DefaultJudgeModel,
         IReadOnlyDictionary<string, double>? tokensPerSecond = null,
@@ -174,9 +181,10 @@ public class FaiRouter
         int topk = 5,
         bool measure = true,
         ContentJudge? contentJudge = null,
+        RouteWeights? weights = null,
         CancellationToken cancellationToken = default) =>
         FromOpenAiCompatibleAsync(Providers.OpenRouter, apiKey, modelIds, databasePath, prices, judgeModel, tokensPerSecond, benchmarks,
-            token => ModelCatalog.FetchAsync(cancellationToken: token), topk, measure, contentJudge, cancellationToken);
+            token => ModelCatalog.FetchAsync(cancellationToken: token), topk, measure, contentJudge, weights, cancellationToken);
 
     /// <summary>
     /// Роутер над любым поставщиком по протоколу OpenAI chat completions: адрес вида https://host/v1,
@@ -191,7 +199,7 @@ public class FaiRouter
     /// </remarks>
     /// <param name="baseUrl">Адрес поставщика вида https://host/v1</param>
     /// <param name="apiKey">Ключ поставщика</param>
-    /// <param name="modelIds">Идентификаторы моделей-кандидатов</param>
+    /// <param name="modelIds">Идентификаторы моделей-кандидатов; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
     /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
     /// <param name="prices">Цены за миллион токенов для моделей, которых нет в каталоге</param>
     /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
@@ -201,11 +209,12 @@ public class FaiRouter
     /// <param name="topk">Сколько лучших участвуют в выборе</param>
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
+    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static async Task<FaiRouter> FromOpenAiCompatibleAsync(
         string baseUrl,
         string apiKey,
-        IEnumerable<string> modelIds,
+        IEnumerable<string>? modelIds = null,
         string? databasePath = null,
         IReadOnlyDictionary<string, Price>? prices = null,
         string judgeModel = DefaultJudgeModel,
@@ -215,19 +224,27 @@ public class FaiRouter
         int topk = 5,
         bool measure = true,
         ContentJudge? contentJudge = null,
+        RouteWeights? weights = null,
         CancellationToken cancellationToken = default)
     {
-        string[] ids = [.. modelIds];
+        string[] requested = modelIds is null ? [ModelCatalog.Popular] : [.. modelIds];
         prices ??= new Dictionary<string, Price>();
         benchmarks ??= BenchmarkSnapshot.LoadEmbedded();
 
         Dictionary<string, ModelInfo> known = [];
+        bool named = requested.Length == 1 && (string.Equals(requested[0], ModelCatalog.All, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(requested[0], ModelCatalog.Popular, StringComparison.OrdinalIgnoreCase));
 
-        if (ids.Any(id => !prices.ContainsKey(id)))
+        if (named || requested.Any(id => !prices.ContainsKey(id)))
         {
             catalogFetch ??= token => ModelCatalog.FetchAsync(cancellationToken: token);
             known = (await catalogFetch(cancellationToken).ConfigureAwait(false)).ToDictionary(model => model.Id);
         }
+
+        (IReadOnlyList<string> ids, bool _) = ModelCatalog.Select(requested, known);
+
+        if (ids.Count == 0)
+            throw new ArgumentException("Список моделей пуст: роутеру не из кого выбирать.", nameof(modelIds));
 
         List<BaseRoutedElement> candidates = [];
 
@@ -263,7 +280,7 @@ public class FaiRouter
             return client.SendToLLM(messages, cancellationToken: cancellationToken);
         }
 
-        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge);
+        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights);
     }
 
     /// <summary>
@@ -271,8 +288,9 @@ public class FaiRouter
     /// </summary>
     /// <param name="prompt">Текст запроса</param>
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
-    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None) =>
-        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required);
+    /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
+    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None, RouteWeights? weights = null) =>
+        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required, weights);
 
     /// <summary>
     /// Один ход по диалогу: задача распознается по последнему сообщению пользователя, а
@@ -280,7 +298,8 @@ public class FaiRouter
     /// </summary>
     /// <param name="messages">Реплики диалога по порядку</param>
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
-    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None)
+    /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
+    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None, RouteWeights? weights = null)
     {
         LLMMessage[] dialog = [.. messages];
 
@@ -293,7 +312,7 @@ public class FaiRouter
             throw new ArgumentException("В диалоге нет сообщения пользователя, задачу распознать не из чего.", nameof(messages));
 
         int turns = dialog.Count(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase));
-        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, turns: turns).ConfigureAwait(false);
+        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, weights ?? _weights, turns).ConfigureAwait(false);
         string text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog)).ConfigureAwait(false);
 
         Specifications? actual = null;

@@ -89,6 +89,12 @@ router.train(epochs=10)
 router.save()
 ```
 
+Модели можно не называть: тогда выбор идет среди популярных моделей из комплекта
+(`fai_router/data/popular_models.json`, 54 модели с рейтингами и недорогие рабочие лошадки). Вместо
+списка принимаются наборы `"popular"` и `"all"` (весь каталог поставщика). Профиль весов `weights`
+(`"quality"`, `"balance"`, `"price"` или свои `RouteWeights`) задается роутеру на все ходы либо
+отдельному ходу в `ask`. Таблица моделей и описание профилей есть в корневом README.
+
 Три фабрики: `from_fractalrouter` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к
 моделям с оплатой в рублях, не путать с FractalGPT), `from_openrouter` для OpenRouter и
 `from_openai_compatible(base_url, ...)` для любого сервера по протоколу OpenAI chat completions.

@@ -21,6 +21,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\Python\fai_router\data\benchmark_profiles.json" LogicalName="FAI.Router.benchmark_profiles.json" />
     <EmbeddedResource Include="..\..\..\Python\fai_router\data\benchmark-snapshot.json" LogicalName="FAI.Router.benchmark-snapshot.json" />
+    <EmbeddedResource Include="..\..\..\Python\fai_router\data\popular_models.json" LogicalName="FAI.Router.popular_models.json" />
   </ItemGroup>
 
 </Project>

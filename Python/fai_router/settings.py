@@ -26,6 +26,39 @@ class RouteWeights:
     # Множитель температуры выбора; ноль делает выбор жадным
     temperature_scale: float
 
+    @classmethod
+    def quality(cls) -> "RouteWeights":
+        """Профиль «качество прежде всего»: 0,8 / 0,10 / 0,10. По замеру router-eval обходит по
+        качеству все стратегии, включая всегда самую дорогую модель."""
+        return cls(0.8, 0.10, 0.10, Settings.temperature_scale)
+
+    @classmethod
+    def balance(cls) -> "RouteWeights":
+        """Профиль «баланс»: 0,5 / 0,25 / 0,25, веса по умолчанию. Половина решения за качеством,
+        по четверти за ценой и временем."""
+        return cls(0.5, 0.25, 0.25, Settings.temperature_scale)
+
+    @classmethod
+    def price(cls) -> "RouteWeights":
+        """Профиль «экономный»: 0,3 / 0,60 / 0,10. По замеру router-eval дает качество выше, чем
+        всегда самая дешевая модель, почти по той же цене."""
+        return cls(0.3, 0.60, 0.10, Settings.temperature_scale)
+
+    @classmethod
+    def profile(cls, name: "str | RouteWeights | None") -> "RouteWeights | None":
+        """Веса по имени профиля: quality, balance или price. Готовые веса возвращаются как есть,
+        None означает веса из Settings."""
+        if name is None or isinstance(name, RouteWeights):
+            return name
+        key = name.strip().lower()
+        if key == "quality":
+            return cls.quality()
+        if key in ("balance", "balanced"):
+            return cls.balance()
+        if key in ("price", "cheap", "economy"):
+            return cls.price()
+        raise ValueError(f"Неизвестный профиль весов «{name}»: есть quality, balance и price.")
+
 
 
 @dataclass(frozen=True)

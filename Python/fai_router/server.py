@@ -120,7 +120,10 @@ def _parse_prices(items: list[str]) -> dict[str, tuple[float, float]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сервер FAIRouter, совместимый с OpenAI chat completions")
-    parser.add_argument("--models", required=True, help="идентификаторы моделей через запятую")
+    parser.add_argument("--models", default="popular",
+                        help="идентификаторы моделей через запятую либо набор: popular (по умолчанию) или all")
+    parser.add_argument("--profile", choices=["quality", "balance", "price"], default="balance",
+                        help="профиль весов: качество прежде всего, баланс (по умолчанию) или экономный")
     parser.add_argument("--provider", choices=["auto", "fractalrouter", "openrouter"], default="auto",
                         help="поставщик: FractalRouter или OpenRouter; auto опознает его по виду ключа")
     parser.add_argument("--base-url", default=None,
@@ -137,17 +140,18 @@ def main() -> None:
     if not args.key:
         parser.error("нужен ключ: --key либо переменная FRACTALROUTER_API_KEY или OPENROUTER_API_KEY")
 
-    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    models = args.models.strip() if args.models.strip().lower() in ("all", "popular") \
+        else [m.strip() for m in args.models.split(",") if m.strip()]
     prices = _parse_prices(args.price)
     if args.base_url:
         router = FaiRouter.from_openai_compatible(args.base_url, args.key, models, database_path=args.db,
-                                                  prices=prices, measure=not args.no_measure)
+                                                  prices=prices, measure=not args.no_measure, weights=args.profile)
     elif args.provider == "openrouter" or (args.provider == "auto" and base_url_for_key(args.key) == OPENROUTER_URL):
         router = FaiRouter.from_openai_compatible(OPENROUTER_URL, args.key, models, database_path=args.db,
-                                                  prices=prices, measure=not args.no_measure)
+                                                  prices=prices, measure=not args.no_measure, weights=args.profile)
     else:
         router = FaiRouter.from_fractalrouter(args.key, models, database_path=args.db,
-                                              prices=prices, measure=not args.no_measure)
+                                              prices=prices, measure=not args.no_measure, weights=args.profile)
     serve(router, args.host, args.port)
 
 

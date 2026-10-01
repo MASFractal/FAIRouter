@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using FAI.Router.Enums;
@@ -38,6 +39,22 @@ public static class ModelCatalog
     /// </summary>
     public const double DefaultTokensPerSecond = 50;
 
+    /// <summary>
+    /// Именованный набор вместо списка идентификаторов: весь каталог поставщика
+    /// </summary>
+    public const string All = "all";
+
+    /// <summary>
+    /// Именованный набор вместо списка идентификаторов: популярные модели из комплекта сборки,
+    /// которые есть в каталоге поставщика. Выбор по умолчанию, когда модели не названы.
+    /// </summary>
+    public const string Popular = "popular";
+
+    /// <summary>
+    /// Ресурс со списком популярных моделей: тот же файл, что в пакете на Python
+    /// </summary>
+    public const string PopularResourceName = "FAI.Router.popular_models.json";
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>
@@ -72,6 +89,49 @@ public static class ModelCatalog
             throw new HttpRequestException($"Каталог FractalRouter не отдан: {(int)response.StatusCode} {response.ReasonPhrase}: {json}");
 
         return ParseFractalRouter(json);
+    }
+
+    /// <summary>
+    /// Идентификаторы популярных моделей из комплекта: модели с внешними рейтингами в снимке замеров и
+    /// недорогие рабочие лошадки
+    /// </summary>
+    public static IReadOnlyList<string> PopularModels()
+    {
+        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(PopularResourceName)
+            ?? throw new InvalidOperationException($"В сборке нет ресурса {PopularResourceName}.");
+        using JsonDocument document = JsonDocument.Parse(stream);
+
+        return [.. document.RootElement.GetProperty("models").EnumerateArray()
+            .Select(item => item.GetProperty("id").GetString() ?? "")
+            .Where(id => id.Length > 0)];
+    }
+
+    /// <summary>
+    /// Список идентификаторов по тому, что передали: один элемент «all» дает весь каталог поставщика,
+    /// «popular» дает популярные из комплекта, которые есть в каталоге, иной список берется как есть.
+    /// Strict говорит, обязан ли каждый идентификатор найтись: у именованного набора отсутствующие
+    /// модели молча пропускаются, у списка их отсутствие это ошибка.
+    /// </summary>
+    /// <param name="modelIds">Список идентификаторов либо имя набора одним элементом; пусто, значит popular</param>
+    /// <param name="known">Каталог поставщика по идентификаторам</param>
+    public static (IReadOnlyList<string> Ids, bool Strict) Select(IEnumerable<string>? modelIds, IReadOnlyDictionary<string, ModelInfo> known)
+    {
+        string[] ids = modelIds is null ? [Popular] : [.. modelIds];
+
+        if (ids.Length == 1 && string.Equals(ids[0], All, StringComparison.OrdinalIgnoreCase))
+            return ([.. known.Values.Where(model => model.DollarsPerMillionInput >= 0 && model.DollarsPerMillionOutput >= 0).Select(model => model.Id)], false);
+
+        if (ids.Length == 1 && string.Equals(ids[0], Popular, StringComparison.OrdinalIgnoreCase))
+        {
+            string[] found = [.. PopularModels().Where(known.ContainsKey)];
+
+            if (found.Length == 0)
+                throw new InvalidOperationException("Ни одной популярной модели в каталоге поставщика нет: назовите модели списком.");
+
+            return (found, false);
+        }
+
+        return (ids, true);
     }
 
     /// <summary>
