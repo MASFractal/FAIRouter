@@ -290,3 +290,55 @@ def test_profile_reaches_the_route(tmp_path, monkeypatch):
     router.ask("Напиши научный обзор на 1500 знаков.")
     router.ask("Напиши научный обзор на 1500 знаков.", weights="quality")
     assert seen == [None, RouteWeights.quality()]
+
+
+def test_bar_waits_for_human_ratings_then_calibrates(tmp_path, monkeypatch):
+    """Планка по уровню: пока человеческих отзывов меньше трех, ход идет без планки (reached None);
+    после трех оценок калибровка подбирается по журналу и планка начинает действовать."""
+    from fai_router.settings import SufficiencyBar
+
+    router, _ = make_router(tmp_path)
+    router.bar = 0.6
+    prompt = "Напиши научный обзор методов кластеризации на 1500 знаков."
+    first = router.ask(prompt)
+    assert first.reached is None and router.sufficiency_bar(0.6) is None
+
+    for round_id in (1, 2, 3):
+        if round_id > 1:
+            router.ask(prompt)
+        router.feedback(round_id, 1.0)
+    bar = router.sufficiency_bar(0.6)
+    assert isinstance(bar, SufficiencyBar) and bar.bar == 0.6 and bar.prior_rate == 1.0
+    assert len(router.calibration_pairs()) == 3
+
+    answer = router.ask(prompt)
+    assert answer.reached is not None and answer.trace.bar_reached == answer.reached
+
+    with pytest.raises(ValueError, match="вне диапазона"):
+        router.sufficiency_bar(1.5)
+
+
+def test_custom_bar_marks_shortfall_and_takes_the_strongest(tmp_path):
+    """Готовая планка действует сразу. Недостижимая планка: ход отдан сильнейшему по вероятности
+    достаточности, reached ложно, и вызывающий может предупредить человека."""
+    from fai_router.settings import SufficiencyBar
+    from fai_router.training import Calibration
+
+    router, calls = make_router(tmp_path, measure=False)
+    cheap, strong = router.candidates
+    cheap.experience, strong.experience = 20, 20
+    strong.ideal_match_vector = cheap.ideal_match_vector * 3
+
+    unreachable = SufficiencyBar(0.999, Calibration(10.0, -5.0), prior_rate=0.5)
+    answer = router.ask("Напиши научный обзор на 1500 знаков.", bar=unreachable)
+    assert answer.reached is False
+    assert answer.winner == "strong" and not answer.trace.is_exploration
+
+    generous = SufficiencyBar(0.0, Calibration(10.0, -5.0), prior_rate=0.5)
+    answer = router.ask("Напиши научный обзор на 1500 знаков.", bar=generous)
+    assert answer.reached is True
+
+    # Планка без журнала и без калибровки взять неоткуда
+    bare = FaiRouter(router.candidates, lambda c, m: "", measure=False, bar=0.7)
+    with pytest.raises(RuntimeError, match="журнала"):
+        bare.ask("Напиши научный обзор на 1500 знаков.")

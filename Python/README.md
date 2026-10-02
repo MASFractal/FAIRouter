@@ -1,5 +1,9 @@
 # FAIRouter на Python
 
+[![MAS](https://img.shields.io/badge/MAS-многоагентная_система-1E90FF?style=flat-square)](https://mas2.fractalagents.ai/)
+[![Чат MAS](https://img.shields.io/badge/Чат-попробовать-40E0D0?style=flat-square)](https://mas2.fractalagents.ai/chat/)
+[![FractalRouter](https://img.shields.io/badge/FractalRouter-400%2B_моделей-0B3D91?style=flat-square)](https://fractalrouter.ru)
+
 Перенос библиотеки `FAI.Router` с C# на Python. Устройство, метрика и все находки измерений
 общие, они описаны в [корневом README](https://github.com/MASFractal/FAIRouter/blob/main/README.md) и в [docs/research](https://github.com/MASFractal/FAIRouter/tree/main/docs/research).
 Здесь только то, что касается этой версии.
@@ -102,7 +106,10 @@ router.save()
 (`fai_router/data/popular_models.json`, 54 модели с рейтингами и недорогие рабочие лошадки). Вместо
 списка принимаются наборы `"popular"` и `"all"` (весь каталог поставщика). Профиль весов `weights`
 (`"quality"`, `"balance"`, `"price"` или свои `RouteWeights`) задается роутеру на все ходы либо
-отдельному ходу в `ask`. Таблица моделей и описание профилей есть в корневом README.
+отдельному ходу в `ask`. Планка достаточности `bar` задается числом от 0 до 1, обязательной
+вероятностью лайка; калибровка к ней подбирается по журналу человеческих отзывов, пока их меньше
+трех, ход идет без планки. Итог хода говорит, дотянул ли кто-то до планки: `answer.reached`.
+Таблица моделей, описание профилей и планки есть в корневом README.
 
 Три фабрики: `from_fractalrouter` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к
 моделям с оплатой в рублях, не путать с FractalGPT), `from_openrouter` для OpenRouter и

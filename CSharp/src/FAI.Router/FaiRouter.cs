@@ -25,6 +25,7 @@ namespace FAI.Router;
 /// <param name="RoundId">Номер хода в журнале, под ним ставится отзыв</param>
 /// <param name="Content">Оценка содержания; пусто, если замер отключен</param>
 /// <param name="Assessment">Итоговая оценка ответа: содержание и форма; пусто, если замер отключен</param>
+/// <param name="Reached">Планка достаточности: истина, если кто-то до нее дотянул, ложь, если ход отдан сильнейшему при недоборе и человека стоит предупредить; пусто, если выбор шел без планки</param>
 public sealed record RouterAnswer(
     string Text,
     BaseRoutedElement Winner,
@@ -35,7 +36,8 @@ public sealed record RouterAnswer(
     DiffSpec? Critic,
     long? RoundId,
     ContentReview? Content = null,
-    double? Assessment = null);
+    double? Assessment = null,
+    bool? Reached = null);
 
 /// <summary>
 /// Цена модели за миллион токенов в валюте поставщика
@@ -55,6 +57,8 @@ public class FaiRouter
     private readonly int _topk;
     private readonly bool _measure;
     private readonly RouteWeights? _weights;
+    private readonly double? _bar;
+    private readonly int _minRatings;
     private readonly SpecOutputService _measurer = new();
     private readonly ContentJudge _contentJudge;
     private readonly RouterTrainer _routerTrainer = new(learningRate: 0.05f);
@@ -81,6 +85,12 @@ public class FaiRouter
     public SqliteWeightsStore? Weights { get; }
 
     /// <summary>
+    /// Готовая планка со своей калибровкой на все ходы. Задана, тогда уровень из конструктора и
+    /// калибровка по журналу не используются.
+    /// </summary>
+    public SufficiencyBar? Bar { get; set; }
+
+    /// <summary>
     /// Роутер целиком
     /// </summary>
     /// <param name="candidates">Кандидаты на исполнение</param>
@@ -90,6 +100,8 @@ public class FaiRouter
     /// <param name="measure">Оценивать ли ответ по форме и содержанию; стоит двух обращений к модели на ход</param>
     /// <param name="contentJudge">Свой судья содержания, например с проверкой фактов по вебу; не задан, тогда общий</param>
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
+    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов; пусто, тогда выбор по метрике R</param>
+    /// <param name="minRatings">Сколько человеческих отзывов нужно, чтобы калибровка планки считалась осмысленной; до этого ход идет без планки</param>
     public FaiRouter(
         IEnumerable<BaseRoutedElement> candidates,
         Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> execute,
@@ -97,9 +109,16 @@ public class FaiRouter
         int topk = 5,
         bool measure = true,
         ContentJudge? contentJudge = null,
-        RouteWeights? weights = null)
+        RouteWeights? weights = null,
+        double? bar = null,
+        int minRatings = 3)
     {
+        if (bar is < 0 or > 1)
+            throw new ArgumentOutOfRangeException(nameof(bar), bar, "Планка вне диапазона: нужна вероятность лайка от 0 до 1.");
+
         _weights = weights;
+        _bar = bar;
+        _minRatings = minRatings;
         Candidates = [.. candidates];
         _execute = execute;
         _topk = topk;
@@ -136,6 +155,7 @@ public class FaiRouter
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
+    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromFractalRouterAsync(
         string apiKey,
@@ -150,9 +170,10 @@ public class FaiRouter
         bool measure = true,
         ContentJudge? contentJudge = null,
         RouteWeights? weights = null,
+        double? bar = null,
         CancellationToken cancellationToken = default) =>
         FromOpenAiCompatibleAsync(baseUrl, apiKey, modelIds, databasePath, prices, judgeModel, tokensPerSecond, benchmarks,
-            token => ModelCatalog.FetchFractalRouterAsync(apiKey, cancellationToken: token), topk, measure, contentJudge, weights, cancellationToken);
+            token => ModelCatalog.FetchFractalRouterAsync(apiKey, cancellationToken: token), topk, measure, contentJudge, weights, bar, cancellationToken);
 
     /// <summary>
     /// Роутер над моделями OpenRouter: цены и возможности из его каталога, ответы через него же.
@@ -169,6 +190,7 @@ public class FaiRouter
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
+    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromOpenRouterAsync(
         string apiKey,
@@ -182,9 +204,10 @@ public class FaiRouter
         bool measure = true,
         ContentJudge? contentJudge = null,
         RouteWeights? weights = null,
+        double? bar = null,
         CancellationToken cancellationToken = default) =>
         FromOpenAiCompatibleAsync(Providers.OpenRouter, apiKey, modelIds, databasePath, prices, judgeModel, tokensPerSecond, benchmarks,
-            token => ModelCatalog.FetchAsync(cancellationToken: token), topk, measure, contentJudge, weights, cancellationToken);
+            token => ModelCatalog.FetchAsync(cancellationToken: token), topk, measure, contentJudge, weights, bar, cancellationToken);
 
     /// <summary>
     /// Роутер над любым поставщиком по протоколу OpenAI chat completions: адрес вида https://host/v1,
@@ -210,6 +233,7 @@ public class FaiRouter
     /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
+    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
     /// <param name="cancellationToken">Токен отмены</param>
     public static async Task<FaiRouter> FromOpenAiCompatibleAsync(
         string baseUrl,
@@ -225,6 +249,7 @@ public class FaiRouter
         bool measure = true,
         ContentJudge? contentJudge = null,
         RouteWeights? weights = null,
+        double? bar = null,
         CancellationToken cancellationToken = default)
     {
         string[] requested = modelIds is null ? [ModelCatalog.Popular] : [.. modelIds];
@@ -280,7 +305,7 @@ public class FaiRouter
             return client.SendToLLM(messages, cancellationToken: cancellationToken);
         }
 
-        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights);
+        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights, bar);
     }
 
     /// <summary>
@@ -289,8 +314,9 @@ public class FaiRouter
     /// <param name="prompt">Текст запроса</param>
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
     /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
-    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None, RouteWeights? weights = null) =>
-        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required, weights);
+    /// <param name="bar">Планка на этот ход, обязательная вероятность лайка; пусто, тогда планка роутера</param>
+    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null) =>
+        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required, weights, bar);
 
     /// <summary>
     /// Один ход по диалогу: задача распознается по последнему сообщению пользователя, а
@@ -299,7 +325,8 @@ public class FaiRouter
     /// <param name="messages">Реплики диалога по порядку</param>
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
     /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
-    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None, RouteWeights? weights = null)
+    /// <param name="bar">Планка на этот ход, обязательная вероятность лайка; пусто, тогда планка роутера</param>
+    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null)
     {
         LLMMessage[] dialog = [.. messages];
 
@@ -312,7 +339,7 @@ public class FaiRouter
             throw new ArgumentException("В диалоге нет сообщения пользователя, задачу распознать не из чего.", nameof(messages));
 
         int turns = dialog.Count(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase));
-        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, weights ?? _weights, turns).ConfigureAwait(false);
+        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, weights ?? _weights, turns, SufficiencyBarFor(bar)).ConfigureAwait(false);
         string text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog)).ConfigureAwait(false);
 
         Specifications? actual = null;
@@ -360,7 +387,7 @@ public class FaiRouter
                 });
         }
 
-        return new RouterAnswer(text, trace.Winner, trace, trace.RequestedSpec, actual, score, critic, roundId, content, assessment);
+        return new RouterAnswer(text, trace.Winner, trace, trace.RequestedSpec, actual, score, critic, roundId, content, assessment, trace.BarReached);
     }
 
     /// <summary>
@@ -381,6 +408,48 @@ public class FaiRouter
             FeadbackScore = score
         });
     }
+
+    /// <summary>
+    /// Планка для хода по уровню: калибровка подбирается по журналу человеческих отзывов. Готовая
+    /// <see cref="Bar"/> берется как есть. Пока отзывов меньше minRatings, планки нет и ход идет по
+    /// метрике R: калибровать не на чем, а планка без калибровки отсекала бы наугад.
+    /// </summary>
+    /// <param name="level">Обязательная вероятность лайка; пусто, тогда уровень роутера</param>
+    public SufficiencyBar? SufficiencyBarFor(double? level = null)
+    {
+        if (Bar is not null)
+            return Bar;
+
+        double? bar = level ?? _bar;
+
+        if (bar is null)
+            return null;
+
+        if (bar is < 0 or > 1)
+            throw new ArgumentOutOfRangeException(nameof(level), bar, "Планка вне диапазона: нужна вероятность лайка от 0 до 1.");
+
+        if (Traces is null)
+            throw new InvalidOperationException("Планка по уровню требует журнала: создайте роутер с databasePath либо задайте готовую Bar с калибровкой.");
+
+        IReadOnlyList<(double Quality, double Score)> pairs = CalibrationPairs();
+
+        if (pairs.Count < _minRatings)
+            return null;
+
+        double rate = pairs.Average(pair => pair.Score);
+
+        return new SufficiencyBar(bar.Value, Calibration.Fit(pairs), rate);
+    }
+
+    /// <summary>
+    /// Пары для калибровки планки из журнала: прогноз качества победителя на признаках той задачи
+    /// при нынешних весах и оценка человека. Автоотзывы не берутся: планка обещает вероятность
+    /// лайка человека, а не согласие судьи с самим собой.
+    /// </summary>
+    public IReadOnlyList<(double Quality, double Score)> CalibrationPairs() =>
+        [.. RequireJournal().ReadRated(Candidates)
+            .Where(round => round.Feedback.FType == FeedbackType.Human)
+            .Select(round => (round.Trace.Winner.GetQualityScore(round.Trace.InputFeatureVector), round.Feedback.FeadbackScore))];
 
     /// <summary>
     /// Обучение по накопленному журналу. Возвращает ошибку последней эпохи.

@@ -10,6 +10,10 @@
 [![Stars](https://img.shields.io/github/stars/MASFractal/FAIRouter?style=flat-square&color=1E90FF&logo=github)](https://github.com/MASFractal/FAIRouter/stargazers)
 [![License](https://img.shields.io/github/license/MASFractal/FAIRouter?style=flat-square&color=1E90FF)](../LICENSE)
 
+[![MAS](https://img.shields.io/badge/MAS-многоагентная_система-1E90FF?style=flat-square)](https://mas2.fractalagents.ai/)
+[![Чат MAS](https://img.shields.io/badge/Чат-попробовать-40E0D0?style=flat-square)](https://mas2.fractalagents.ai/chat/)
+[![FractalRouter](https://img.shields.io/badge/FractalRouter-400%2B_моделей-0B3D91?style=flat-square)](https://fractalrouter.ru)
+
 </div>
 
 Общее описание проекта и его назначение приведены в [корневом README](../README.md). Здесь собрано
@@ -106,8 +110,12 @@ router.Save();
 Вместо списка принимаются наборы одним элементом: `[ModelCatalog.Popular]` и `[ModelCatalog.All]`
 (весь каталог поставщика). Профиль весов задается роутеру на все ходы (`weights: RouteWeights.Price`)
 либо отдельному ходу (`AskAsync(prompt, weights: RouteWeights.Quality)`); готовые профили `Quality`,
-`Balance` и `Price`, свои через `new RouteWeights(...)`. Таблица моделей и описание профилей есть в
-корневом README.
+`Balance` и `Price`, свои через `new RouteWeights(...)`. Планка достаточности `bar` задается числом
+от 0 до 1, обязательной вероятностью лайка, роутеру на все ходы или отдельному ходу в `AskAsync`;
+калибровка к ней подбирается по журналу человеческих отзывов (`CalibrationPairs`), пока их меньше
+трех, ход идет без планки. Готовая планка со своей калибровкой задается свойством `Bar`. Итог хода
+говорит, дотянул ли кто-то до планки: `answer.Reached`. Таблица моделей, описание профилей и планки
+есть в корневом README.
 
 Фабрики три: `FromFractalRouterAsync` для [FractalRouter](https://fractalrouter.ru) (наш шлюз к моделям
 с оплатой в рублях, не путать с FractalGPT), `FromOpenRouterAsync` для OpenRouter и

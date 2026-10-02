@@ -18,10 +18,10 @@ from fai_router.llm.content_judge import ContentJudge
 from fai_router.persistence import SqliteTraceStore, SqliteWeightsStore
 from fai_router.routed_element import RoutedElement
 from fai_router.services import SpecOutputService
-from fai_router.settings import RouteWeights, Settings
+from fai_router.settings import RouteWeights, Settings, SufficiencyBar
 from fai_router.specifications import Specifications
 from fai_router.tracking import Feedback, Tracert
-from fai_router.training import JudgeTrainer, RouterTrainer
+from fai_router.training import Calibration, JudgeTrainer, RouterTrainer
 
 if TYPE_CHECKING:
     from fai_router.benchmarks import BenchmarkSnapshot
@@ -64,6 +64,9 @@ class RouterAnswer:
     # Оценка содержания и итоговая оценка по содержанию и форме; None, если замер отключен
     content: ContentReview | None = None
     assessment: float | None = None
+    # Планка достаточности: истина, если кто-то до нее дотянул, ложь, если ход отдан сильнейшему
+    # при недоборе и человека стоит предупредить; None, если выбор шел без планки
+    reached: bool | None = None
 
 
 class FaiRouter:
@@ -79,8 +82,17 @@ class FaiRouter:
         llm: OpenRouterClient | None = None,
         content_judge: ContentJudge | None = None,
         weights: "RouteWeights | str | None" = None,
+        bar: "float | SufficiencyBar | None" = None,
+        min_ratings: int = 3,
     ):
         self.candidates = list(candidates)
+        # Планка достаточности на все ходы: число от 0 до 1 это обязательная вероятность лайка,
+        # калибровка к ней подбирается по журналу человеческих отзывов; готовая SufficiencyBar
+        # берется как есть. None означает выбор по метрике R без планки
+        self.bar = bar
+        # Сколько человеческих отзывов нужно, чтобы калибровка планки по журналу считалась
+        # осмысленной; до этого ход идет без планки
+        self.min_ratings = min_ratings
         # Профиль весов на все ходы: quality, balance, price либо свои RouteWeights; None означает
         # веса из Settings. Ход может назвать свой профиль и перекрыть этот
         self.route_weights = RouteWeights.profile(weights)
@@ -160,7 +172,9 @@ class FaiRouter:
 
         Модели задаются списком идентификаторов либо именем набора: «popular» это популярные из
         комплекта (data/popular_models.json), которые есть в каталоге поставщика, «all» это весь его
-        каталог. Профиль весов weights (quality, balance, price) действует на все ходы.
+        каталог. Профиль весов weights (quality, balance, price) действует на все ходы, как и
+        планка достаточности bar: обязательная вероятность лайка от 0 до 1, калибруется по
+        журналу человеческих отзывов.
 
         Цены кандидатов берутся из prices, (вход, выход) за миллион токенов в валюте поставщика;
         модели, которых там нет, ищутся в каталоге catalog_fetch (по умолчанию каталог OpenRouter)
@@ -213,13 +227,16 @@ class FaiRouter:
         return cls(candidates, execute, database_path, llm=judge, **kwargs)
 
     def ask(self, prompt: str, required: Capability = Capability.NONE,
-            weights: "RouteWeights | str | None" = None) -> RouterAnswer:
+            weights: "RouteWeights | str | None" = None,
+            bar: "float | SufficiencyBar | None" = None) -> RouterAnswer:
         """Один ход по тексту запроса. Профиль весов на этот ход: quality, balance, price либо
-        свои RouteWeights; не задан, тогда профиль роутера."""
-        return self.ask_messages([{"role": "user", "content": prompt}], required, weights)
+        свои RouteWeights; не задан, тогда профиль роутера. Планка на этот ход: обязательная
+        вероятность лайка либо готовая SufficiencyBar; не задана, тогда планка роутера."""
+        return self.ask_messages([{"role": "user", "content": prompt}], required, weights, bar)
 
     def ask_messages(self, messages: Messages, required: Capability = Capability.NONE,
-                     weights: "RouteWeights | str | None" = None) -> RouterAnswer:
+                     weights: "RouteWeights | str | None" = None,
+                     bar: "float | SufficiencyBar | None" = None) -> RouterAnswer:
         """Один ход по диалогу: задача распознается по последнему сообщению пользователя, а
         исполнителю уходит весь диалог целиком."""
         prompt = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -228,14 +245,16 @@ class FaiRouter:
 
         turns = sum(1 for m in messages if m.get("role") == "user")
         trace = env.route(prompt, self.candidates, self.topk, required,
-                          weights=RouteWeights.profile(weights) or self.route_weights, turns=turns)
+                          weights=RouteWeights.profile(weights) or self.route_weights, turns=turns,
+                          bar=self.sufficiency_bar(self.bar if bar is None else bar))
         completion = env.execute(trace, lambda candidate: self._execute(candidate, messages))
         if isinstance(completion, str):
             completion = Completion(completion)
 
         answer = RouterAnswer(completion.text, trace.winner.name, trace, trace.requested_spec,
                               prompt_tokens=completion.prompt_tokens,
-                              completion_tokens=completion.completion_tokens)
+                              completion_tokens=completion.completion_tokens,
+                              reached=trace.bar_reached)
 
         if self.measure and completion.text.strip():
             self._measure(answer, prompt)
@@ -246,6 +265,35 @@ class FaiRouter:
             if answer.assessment is not None:
                 self.traces.set_feedback(answer.round_id, Feedback(FeedbackType.AUTO, answer.assessment))
         return answer
+
+    def sufficiency_bar(self, bar: "float | SufficiencyBar | None") -> SufficiencyBar | None:
+        """Планка для хода. Готовая SufficiencyBar берется как есть. Число это уровень, а
+        калибровка к нему подбирается по журналу: пары «прогноз качества победителя на той задаче
+        и оценка человека», доля лайков как усадка для малоизученных. Пока человеческих отзывов
+        меньше min_ratings, планки нет и ход идет по метрике R: калибровать не на чем, а планка
+        без калибровки отсекала бы наугад."""
+        if bar is None or isinstance(bar, SufficiencyBar):
+            return bar
+        if not 0.0 <= bar <= 1.0:
+            raise ValueError(f"Планка {bar} вне диапазона: нужна вероятность лайка от 0 до 1.")
+        if self.traces is None:
+            raise RuntimeError("Планка по уровню требует журнала: создайте роутер с database_path "
+                               "либо передайте готовую SufficiencyBar с калибровкой.")
+        pairs = self.calibration_pairs()
+        if len(pairs) < self.min_ratings:
+            log.info("Человеческих отзывов %d из %d нужных: ход без планки.", len(pairs), self.min_ratings)
+            return None
+        rate = sum(score for _, score in pairs) / len(pairs)
+        return SufficiencyBar(bar, Calibration.fit(pairs), prior_rate=rate)
+
+    def calibration_pairs(self) -> list[tuple[float, float]]:
+        """Пары для калибровки планки из журнала: прогноз качества победителя на признаках той
+        задачи при нынешних весах и оценка человека. Автоотзывы не берутся: планка обещает
+        вероятность лайка человека, а не согласие судьи с самим собой."""
+        return [(training_round.trace.winner.get_quality_score(training_round.trace.input_feature_vector),
+                 training_round.feedback.score)
+                for training_round in self._require_journal().read_rated(self.candidates)
+                if training_round.feedback.ftype == FeedbackType.HUMAN]
 
     def _measure(self, answer: RouterAnswer, prompt: str) -> None:
         """Замер и оценка ответа. Сбой судьи (сеть, поставщик) ход не роняет: исполнитель уже

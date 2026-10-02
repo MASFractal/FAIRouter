@@ -28,7 +28,7 @@ public static class Env
     /// <param name="topk">Сколько лучших оставить</param>
     /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
     /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
-    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null, int turns = 1)
+    public static async Task<Tracert> RouteAsync(string textPrompt, IEnumerable<BaseRoutedElement> elements, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null, int turns = 1, SufficiencyBar? bar = null)
     {
         BaseRoutedElement[] candidates = [.. elements];
 
@@ -41,7 +41,9 @@ public static class Env
         InputFeatures features = await InputFeaturesService.GetFeaturesAsync(textPrompt).ConfigureAwait(false);
         features.TurnCount = Math.Max(turns, 1);
 
-        return Choose(features, candidates, topk, required, weights);
+        return bar is null
+            ? Choose(features, candidates, topk, required, weights)
+            : ChooseSufficient(features, candidates, bar.Value, topk, required, weights);
     }
 
     /// <summary>
@@ -73,6 +75,40 @@ public static class Env
             InputFeatureVector = features.FeatureVector,
             RequestedSpec = features.InputSpecifications,
             IsExploration = chosen != 0
+        };
+    }
+
+    /// <summary>
+    /// Выбор с планкой достаточности, оформленный трассировкой: среди дотянувших до планки ход
+    /// разыгрывается как в <see cref="Choose"/>, по метрике R с температурой. Не дотянул никто, тогда
+    /// ход отдается сильнейшему по вероятности достаточности, без жребия: разведка уместна среди
+    /// достаточных, а при недоборе человек и так получает не то, что просил.
+    /// </summary>
+    /// <param name="features">Признаки запроса</param>
+    /// <param name="elements">Кандидаты на исполнение</param>
+    /// <param name="bar">Планка достаточности этого выбора</param>
+    /// <param name="topk">Сколько лучших оставить</param>
+    /// <param name="required">Требования к возможностям, которых нет в спецификации</param>
+    /// <param name="weights">Веса этого выбора; пусто, тогда берутся общие из Settings</param>
+    public static Tracert ChooseSufficient(InputFeatures features, IEnumerable<BaseRoutedElement> elements, SufficiencyBar bar, int topk = 5, Capability required = Capability.None, RouteWeights? weights = null)
+    {
+        SufficientTop chosen = GetSufficient(features, elements, bar, topk, required, weights);
+
+        if (chosen.Top.Count == 0)
+            throw new ArgumentException(
+                "Ни один кандидат не подходит: список пуст либо все отсеяны по возможностям.",
+                nameof(elements));
+
+        int index = chosen.Reached ? Sample(chosen.Top, weights) : 0;
+
+        return new Tracert
+        {
+            Winner = chosen.Top[index].Element,
+            TopKElements = [.. chosen.Top.Select(item => item.Element)],
+            InputFeatureVector = features.FeatureVector,
+            RequestedSpec = features.InputSpecifications,
+            IsExploration = index != 0,
+            BarReached = chosen.Reached
         };
     }
 

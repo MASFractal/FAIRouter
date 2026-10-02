@@ -39,16 +39,19 @@ class SufficientTop:
 
 def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
           required: Capability = Capability.NONE, weights: RouteWeights | None = None,
-          turns: int = 1) -> Tracert:
+          turns: int = 1, bar: SufficiencyBar | None = None) -> Tracert:
     """Полный ход роутинга: признаки запроса, соревнование кандидатов, трассировка.
     Баллы в трассировке проставляет судья, после того как победитель ответит.
-    Веса этого выбора; пусто, тогда берутся общие из Settings."""
+    Веса этого выбора; пусто, тогда берутся общие из Settings. С планкой bar выбор идет по
+    принципу «необходимо и достаточно» (choose_sufficient), без нее по метрике R (choose)."""
     candidates = list(elements)
     # Проверка до обращения к модели: распознавание задания стоит денег
     if not candidates:
         raise ValueError("Ни один кандидат не подходит: список пуст либо все отсеяны по возможностям.")
     features = InputFeaturesService.get_features_full(text_prompt)
     features.turn_count = max(turns, 1)
+    if bar is not None:
+        return choose_sufficient(features, candidates, bar, topk, required, weights=weights)
     return choose(features, candidates, topk, required, weights=weights)
 
 
@@ -69,6 +72,27 @@ def choose(features: InputFeatures, elements: Iterable[RoutedElement], topk: int
         input_feature_vector=features.feature_vector(),
         requested_spec=features.input_specifications,
         is_exploration=chosen != 0,
+    )
+
+
+def choose_sufficient(features: InputFeatures, elements: Iterable[RoutedElement], bar: SufficiencyBar,
+                      topk: int = 5, required: Capability = Capability.NONE,
+                      rng: random.Random | None = None, weights: RouteWeights | None = None) -> Tracert:
+    """Выбор с планкой достаточности, оформленный трассировкой: среди дотянувших до планки
+    ход разыгрывается как в choose, по метрике R с температурой. Не дотянул никто, тогда ход
+    отдается сильнейшему по вероятности достаточности, без жребия: разведка уместна среди
+    достаточных, а при недоборе человек и так получает не то, что просил."""
+    chosen = get_sufficient(features, elements, bar, topk, required, weights=weights)
+    if not chosen.top:
+        raise ValueError("Ни один кандидат не подходит: список пуст либо все отсеяны по возможностям.")
+    index = _sample(chosen.top, rng or random, weights) if chosen.reached else 0
+    return Tracert(
+        winner=chosen.top[index][1],
+        top_k_elements=[element for _, element in chosen.top],
+        input_feature_vector=features.feature_vector(),
+        requested_spec=features.input_specifications,
+        is_exploration=index != 0,
+        bar_reached=chosen.reached,
     )
 
 

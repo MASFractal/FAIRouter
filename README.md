@@ -19,6 +19,25 @@
 [![Смотреть на YouTube](https://img.shields.io/badge/YouTube-смотреть-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://youtu.be/FMesl7rxbYo)
 [![Смотреть в VK Video](https://img.shields.io/badge/VK%20Video-смотреть-0077FF?style=flat-square&logo=vk&logoColor=white)](https://vkvideo.ru/video-233381656_456239019)
 
+<br>
+
+<table align="center">
+<tr>
+<td align="center" width="720">
+<br>
+<b>Увидеть в деле: MAS, многоагентная система FractalAgents</b>
+<br><br>
+Команда агентов разбирает задачу на шаги, выполняет их с инструментами и собирает результат.
+Сервис той же команды, что и эта библиотека. Попробовать можно сразу в чате, без установки.
+<br><br>
+<a href="https://mas2.fractalagents.ai/"><img src="https://img.shields.io/badge/MAS-открыть_сервис-1E90FF?style=for-the-badge" alt="Открыть MAS"></a>&nbsp;
+<a href="https://mas2.fractalagents.ai/chat/"><img src="https://img.shields.io/badge/Чат-попробовать-40E0D0?style=for-the-badge&logoColor=white" alt="Попробовать в чате"></a>&nbsp;
+<a href="https://fractalrouter.ru"><img src="https://img.shields.io/badge/FractalRouter-400%2B_моделей_в_рублях-0B3D91?style=for-the-badge" alt="FractalRouter"></a>
+<br><br>
+</td>
+</tr>
+</table>
+
 </div>
 
 ---
@@ -66,7 +85,7 @@ FAIRouter выбирает исполнителя сам, а затем пров
 уровень цены или предупредить человека.
 
 **Нужно знать, выполнено ли задание, а не только получить текст.** Судья сравнивает готовый
-ответ с распознанным заданием по шестнадцати пунктам и показывает, где именно расхождение:
+ответ с распознанным заданием по двадцати пунктам и показывает, где именно расхождение:
 заказано 4 раздела и таблица, получено 1 раздел без таблицы. Работает и отдельно от роутинга, как
 приемка любого текста по его брифу.
 
@@ -306,6 +325,36 @@ foreach (var (score, candidate) in Env.GetTopK(features, candidates))
 Прогноз качества q сам по себе относительный: он умеет сказать «этот лучше того», но не «этот
 сойдет». Поэтому планке нужна калибровка, то есть перевод прогноза в вероятность лайка
 `σ(A·q + B)`, подобранный по журналу пар «прогноз в момент выбора и оценка человека».
+
+Через фасад планка задается одним числом, обязательной вероятностью лайка, а калибровку роутер
+подбирает сам по журналу человеческих отзывов:
+
+```python
+router = FaiRouter.from_fractalrouter("rtr_live_...", database_path="fai-router.db", bar=0.7)
+answer = router.ask("Составь отчет по таблице продаж за квартал")
+if answer.reached is False:
+    print("Под этой планкой никто не дотягивает: ответил сильнейший, стоит предупредить человека")
+answer = router.ask("Черновик поста для соцсети", bar=0.5)   # этому ходу планка пониже
+```
+
+```csharp
+FaiRouter router = await FaiRouter.FromFractalRouterAsync("rtr_live_...", databasePath: "fai-router.db", bar: 0.7);
+RouterAnswer answer = await router.AskAsync("Составь отчет по таблице продаж за квартал");
+if (answer.Reached == false)
+    Console.WriteLine("Под этой планкой никто не дотягивает: ответил сильнейший");
+```
+
+Пока человеческих отзывов в журнале меньше трех (`min_ratings`), калибровать не на чем, и ход идет
+по метрике R без планки: `answer.reached` равен `None`. С тремя и более отзывами планка включается,
+и каждый следующий отзыв уточняет калибровку. Готовую планку со своей калибровкой можно передать
+вместо числа: `bar=SufficiencyBar(...)` в Python и свойство `router.Bar` в C#. У сервера планка
+задается доводом `--bar 0.7`, и в ответе приходит поле `fai_router.reached`.
+
+Среди дотянувших до планки ход разыгрывается как обычно, по метрике R с температурой, поэтому
+разведка новичков сохраняется. Если не дотянул никто, ход без жребия отдается сильнейшему по
+вероятности достаточности.
+
+Те же действия по частям, без фасада:
 
 ```python
 from fai_router import SufficiencyBar, env

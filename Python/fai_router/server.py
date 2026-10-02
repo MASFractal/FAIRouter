@@ -56,7 +56,7 @@ class RouterHandler(BaseHTTPRequestHandler):
             "usage": {"prompt_tokens": answer.prompt_tokens, "completion_tokens": answer.completion_tokens,
                       "total_tokens": answer.prompt_tokens + answer.completion_tokens},
             "fai_router": {"round_id": answer.round_id, "score": answer.score,
-                           "exploration": answer.trace.is_exploration},
+                           "exploration": answer.trace.is_exploration, "reached": answer.reached},
         }
         if body.get("stream"):
             self._stream(payload)
@@ -124,6 +124,9 @@ def main() -> None:
                         help="идентификаторы моделей через запятую либо набор: popular (по умолчанию) или all")
     parser.add_argument("--profile", choices=["quality", "balance", "price"], default="balance",
                         help="профиль весов: качество прежде всего, баланс (по умолчанию) или экономный")
+    parser.add_argument("--bar", type=float, default=None, metavar="0..1",
+                        help="планка достаточности: обязательная вероятность лайка; калибруется по журналу "
+                             "человеческих отзывов, до их накопления выбор идет без планки")
     parser.add_argument("--provider", choices=["auto", "fractalrouter", "openrouter"], default="auto",
                         help="поставщик: FractalRouter или OpenRouter; auto опознает его по виду ключа")
     parser.add_argument("--base-url", default=None,
@@ -145,13 +148,13 @@ def main() -> None:
     prices = _parse_prices(args.price)
     if args.base_url:
         router = FaiRouter.from_openai_compatible(args.base_url, args.key, models, database_path=args.db,
-                                                  prices=prices, measure=not args.no_measure, weights=args.profile)
+                                                  prices=prices, measure=not args.no_measure, weights=args.profile, bar=args.bar)
     elif args.provider == "openrouter" or (args.provider == "auto" and base_url_for_key(args.key) == OPENROUTER_URL):
         router = FaiRouter.from_openai_compatible(OPENROUTER_URL, args.key, models, database_path=args.db,
-                                                  prices=prices, measure=not args.no_measure, weights=args.profile)
+                                                  prices=prices, measure=not args.no_measure, weights=args.profile, bar=args.bar)
     else:
         router = FaiRouter.from_fractalrouter(args.key, models, database_path=args.db,
-                                              prices=prices, measure=not args.no_measure, weights=args.profile)
+                                              prices=prices, measure=not args.no_measure, weights=args.profile, bar=args.bar)
     serve(router, args.host, args.port)
 
 
