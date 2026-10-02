@@ -21,22 +21,10 @@
 
 <br>
 
-<table align="center">
-<tr>
-<td align="center" width="720">
-<br>
-<b>Увидеть в деле: MAS, многоагентная система FractalAgents</b>
-<br><br>
-Команда агентов разбирает задачу на шаги, выполняет их с инструментами и собирает результат.
-Сервис той же команды, что и эта библиотека. Попробовать можно сразу в чате, без установки.
-<br><br>
-<a href="https://mas2.fractalagents.ai/"><img src="https://img.shields.io/badge/MAS-открыть_сервис-1E90FF?style=for-the-badge" alt="Открыть MAS"></a>&nbsp;
-<a href="https://mas2.fractalagents.ai/chat/"><img src="https://img.shields.io/badge/Чат-попробовать-40E0D0?style=for-the-badge&logoColor=white" alt="Попробовать в чате"></a>&nbsp;
-<a href="https://fractalrouter.ru"><img src="https://img.shields.io/badge/FractalRouter-400%2B_моделей_в_рублях-0B3D91?style=for-the-badge" alt="FractalRouter"></a>
-<br><br>
-</td>
-</tr>
-</table>
+<a href="https://mas2.fractalagents.ai/"><img src="docs/logo/mas-banner.svg" alt="MAS: многоагентная система FractalAgents. Команда ИИ-агентов берет задачу целиком: делит на шаги, подключает инструменты, собирает и проверяет результат" width="760"></a>
+
+<a href="https://mas2.fractalagents.ai/"><img src="https://img.shields.io/badge/%D0%9E%D1%82%D0%BA%D1%80%D1%8B%D1%82%D1%8C_%D1%81%D0%B5%D1%80%D0%B2%D0%B8%D1%81-1E90FF?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI%2BPGNpcmNsZSBjeD0iMTIiIGN5PSI1IiByPSIzIi8%2BPGNpcmNsZSBjeD0iNSIgY3k9IjE4IiByPSIzIi8%2BPGNpcmNsZSBjeD0iMTkiIGN5PSIxOCIgcj0iMyIvPjxwYXRoIGQ9Ik0xMSA3LjUgNi41IDE1LjJsMS4zLjhMMTIgOWw0LjIgNyAxLjMtLjhMMTMgNy41ek04IDE4aDh2MS42SDh6Ii8%2BPC9zdmc%2B" alt="Открыть сервис MAS" height="36"></a>&nbsp;&nbsp;
+<a href="https://mas2.fractalagents.ai/chat/"><img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%BF%D1%80%D0%BE%D0%B1%D0%BE%D0%B2%D0%B0%D1%82%D1%8C_%D0%B2_%D1%87%D0%B0%D1%82%D0%B5-40E0D0?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzBCMUYzQSI%2BPHBhdGggZD0iTTEyIDNDNi41IDMgMiA2LjYgMiAxMWMwIDIuNCAxLjMgNC41IDMuNCA2TDQgMjFsNS0yLjJjMSAuMiAxLjkuMyAzIC4zIDUuNSAwIDEwLTMuNiAxMC04cy00LjUtOC0xMC04em0tNCA5LjNhMS4zIDEuMyAwIDEgMSAwLTIuNiAxLjMgMS4zIDAgMCAxIDAgMi42em00IDBhMS4zIDEuMyAwIDEgMSAwLTIuNiAxLjMgMS4zIDAgMCAxIDAgMi42em00IDBhMS4zIDEuMyAwIDEgMSAwLTIuNiAxLjMgMS4zIDAgMCAxIDAgMi42eiIvPjwvc3ZnPg%3D%3D" alt="Попробовать MAS в чате" height="36"></a>
 
 </div>
 
