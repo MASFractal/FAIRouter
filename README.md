@@ -106,8 +106,10 @@ pip install fai-router
 ```
 
 Пока пакет не выложен на PyPI, та же команда ставит его прямо из репозитория:
-`pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"`. Без установки
-файл с кодом кладется в каталог `Python` репозитория, рядом с пакетом `fai_router`.
+`pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"`. Если pip не может
+скачать setuptools для сборки (индекс PyPI недоступен из сети), добавьте `--no-build-isolation`,
+тогда сборка идет уже установленным setuptools. Без установки файл с кодом кладется в каталог
+`Python` репозитория, рядом с пакетом `fai_router`.
 
 Поставщики задаются фабриками: `FaiRouter.from_fractalrouter` для [FractalRouter](https://fractalrouter.ru),
 `FaiRouter.from_openrouter` для OpenRouter и `FaiRouter.from_openai_compatible(base_url, ...)` для

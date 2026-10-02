@@ -3,8 +3,7 @@ name = "fai-router"
 version = "0.1.0"
 description = "Выбор исполнителя под задачу среди LLM, судья результата и обучение на отзывах"
 readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
+license = { text = "Apache-2.0" }
 authors = [{ name = "MASFractal" }]
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.26"]
@@ -12,6 +11,7 @@ keywords = ["llm", "router", "routing", "openai", "openrouter", "fractalrouter",
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Natural Language :: Russian",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -34,8 +34,10 @@ test = ["pytest>=8"]
 [project.scripts]
 fai-router = "fai_router.server:main"
 
+# Нижняя граница старая намеренно: сборка не должна требовать свежего setuptools из индекса,
+# у многих он недоступен или стоит старый. LICENSE setuptools кладет в пакет сам
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 # Забор внешних замеров (fai_router.sources) в пакет не входит: он живет вне репозитория,

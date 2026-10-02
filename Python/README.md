@@ -22,6 +22,15 @@ pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"
 После установки файл с вызовом роутера может лежать где угодно. Без установки его кладут в этот
 каталог, `Python`, рядом с пакетом `fai_router`, иначе `import fai_router` пакет не найдет.
 
+Сборке нужен только `setuptools` не старше 61, он есть в любом современном Python. Если pip при
+установке не может скачать setuptools из индекса (ошибка вида `Could not find a version that
+satisfies the requirement setuptools`), значит индекс PyPI из вашей сети недоступен; тогда
+соберите уже установленным setuptools:
+
+```bash
+pip install --no-build-isolation "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"
+```
+
 Для разработки пакет ставится в режиме правки вместе с тестами, сборка колеса и выкладка делаются
 обычными средствами:
 
