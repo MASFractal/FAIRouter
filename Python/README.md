@@ -2,6 +2,7 @@
 
 [![MAS](https://img.shields.io/badge/MAS-многоагентная_система-1E90FF?style=flat-square)](https://mas2.fractalagents.ai/)
 [![Чат MAS](https://img.shields.io/badge/Чат-попробовать-40E0D0?style=flat-square)](https://mas2.fractalagents.ai/chat/)
+[![FractalRouter](https://img.shields.io/badge/FractalRouter-400%2B_моделей-0B3D91?style=flat-square)](https://fractalrouter.ru)
 
 Перенос библиотеки `FAI.Router` с C# на Python. Устройство, метрика и все находки измерений
 общие, они описаны в [корневом README](https://github.com/MASFractal/FAIRouter/blob/main/README.md) и в [docs/research](https://github.com/MASFractal/FAIRouter/tree/main/docs/research).
