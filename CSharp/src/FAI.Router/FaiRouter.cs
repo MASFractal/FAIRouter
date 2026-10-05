@@ -58,6 +58,7 @@ public class FaiRouter
     private readonly bool _measure;
     private readonly RouteWeights? _weights;
     private readonly double? _bar;
+    private readonly double? _temperatureScale;
     private readonly int _minRatings;
     private readonly SpecOutputService _measurer = new();
     private readonly ContentJudge _contentJudge;
@@ -102,6 +103,7 @@ public class FaiRouter
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов; пусто, тогда выбор по метрике R</param>
     /// <param name="minRatings">Сколько человеческих отзывов нужно, чтобы калибровка планки считалась осмысленной; до этого ход идет без планки</param>
+    /// <param name="temperatureScale">Свой множитель температуры роутера; пусто, тогда общий из Settings. Фабрики ставят пониженный Settings.PriorTemperatureScale, когда все кандидаты стартуют с начальных весов по рейтингам</param>
     public FaiRouter(
         IEnumerable<BaseRoutedElement> candidates,
         Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> execute,
@@ -111,7 +113,8 @@ public class FaiRouter
         ContentJudge? contentJudge = null,
         RouteWeights? weights = null,
         double? bar = null,
-        int minRatings = 3)
+        int minRatings = 3,
+        double? temperatureScale = null)
     {
         if (bar is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(bar), bar, "Планка вне диапазона: нужна вероятность лайка от 0 до 1.");
@@ -119,6 +122,7 @@ public class FaiRouter
         _weights = weights;
         _bar = bar;
         _minRatings = minRatings;
+        _temperatureScale = temperatureScale;
         Candidates = [.. candidates];
         _execute = execute;
         _topk = topk;
@@ -305,7 +309,12 @@ public class FaiRouter
             return client.SendToLLM(messages, cancellationToken: cancellationToken);
         }
 
-        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights, bar);
+        // Все кандидаты стартуют с начальных весов по рейтингам: долгая разведка не нужна, и множитель
+        // температуры берется пониженный. Хотя бы один без рейтингов, тогда общий
+        bool informed = ids.All(id => BenchmarkPrior.GetVector(benchmarks, id) is not null);
+
+        return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights, bar,
+            temperatureScale: informed ? Settings.PriorTemperatureScale : null);
     }
 
     /// <summary>
@@ -339,7 +348,7 @@ public class FaiRouter
             throw new ArgumentException("В диалоге нет сообщения пользователя, задачу распознать не из чего.", nameof(messages));
 
         int turns = dialog.Count(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase));
-        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, weights ?? _weights, turns, SufficiencyBarFor(bar)).ConfigureAwait(false);
+        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, WeightsFor(weights), turns, SufficiencyBarFor(bar)).ConfigureAwait(false);
         string text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog)).ConfigureAwait(false);
 
         Specifications? actual = null;
@@ -407,6 +416,26 @@ public class FaiRouter
             FType = human ? FeedbackType.Human : FeedbackType.Auto,
             FeadbackScore = score
         });
+    }
+
+    /// <summary>
+    /// Веса хода: названные для хода, иначе веса роутера, иначе общие из Settings. Свой множитель
+    /// температуры роутера подставляется в веса, у которых множитель общий (веса по умолчанию и
+    /// готовые профили Quality, Balance, Price); веса с собственным множителем берутся как есть.
+    /// </summary>
+    /// <param name="weights">Веса этого хода; пусто, тогда веса роутера</param>
+    public RouteWeights? WeightsFor(RouteWeights? weights = null)
+    {
+        RouteWeights? chosen = weights ?? _weights;
+
+        if (_temperatureScale is null)
+            return chosen;
+
+        RouteWeights resolved = chosen ?? Settings.Current;
+
+        return resolved.TemperatureScale == Settings.TemperatureScale
+            ? resolved with { TemperatureScale = _temperatureScale.Value }
+            : resolved;
     }
 
     /// <summary>

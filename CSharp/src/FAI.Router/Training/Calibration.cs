@@ -34,15 +34,27 @@ public readonly record struct Calibration(double A, double B)
     public double Predict(double quality) => Sigmoid(A * quality + B);
 
     /// <summary>
+    /// Сила стягивания наклона к нулю по умолчанию, см. <see cref="Fit"/>
+    /// </summary>
+    public const double DefaultRidge = 0.1;
+
+    /// <summary>
     /// Подбирает калибровку по парам «прогноз и оценка».
     /// </summary>
     /// <remarks>
     /// Наклон стягивается к нулю (<paramref name="ridge"/>): пока оценок мало, прогноз считается
     /// малоинформативным, и калибровка отдает почти одну долю лайков, а не выдумывает зависимость.
+    /// <para>
+    /// Сила стягивания по умолчанию 0,1. До 05.10.2026 она равнялась 1, и наклон оставался заниженным
+    /// даже на сотнях оценок: 5,3 при истинном 8 на 500 оценках. Значение выбрано по избыточной
+    /// логистической ошибке на отложенных точках (наклоны 3, 8 и 16, от 3 до 500 оценок, по 300
+    /// выборок): в среднем 0,337 при 1, 0,241 при 0,1, 0,225 при 0,01. Слабее 0,1 стягивать не стали:
+    /// на 3-10 оценках и пологой зависимости ошибка тогда растет.
+    /// </para>
     /// </remarks>
     /// <param name="pairs">Прогноз в момент выбора и оценка от 0 до 1</param>
     /// <param name="ridge">Сила стягивания наклона к нулю</param>
-    public static Calibration Fit(IReadOnlyList<(double Quality, double Score)> pairs, double ridge = 1.0)
+    public static Calibration Fit(IReadOnlyList<(double Quality, double Score)> pairs, double ridge = DefaultRidge)
     {
         if (pairs.Count == 0)
             throw new ArgumentException("Нужна хотя бы одна оценка.", nameof(pairs));

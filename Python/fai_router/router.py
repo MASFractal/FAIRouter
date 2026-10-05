@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable, Iterable
 
 from fai_router import env
@@ -84,8 +84,14 @@ class FaiRouter:
         weights: "RouteWeights | str | None" = None,
         bar: "float | SufficiencyBar | None" = None,
         min_ratings: int = 3,
+        temperature_scale: float | None = None,
     ):
         self.candidates = list(candidates)
+        # Свой множитель температуры роутера; None означает общий из Settings. Фабрики ставят
+        # сюда пониженный Settings.PRIOR_TEMPERATURE_SCALE, когда все кандидаты стартуют с
+        # начальных весов по рейтингам. Веса, заданные готовым RouteWeights, множитель не трогает
+        self.temperature_scale = temperature_scale
+        self._explicit_weights = isinstance(weights, RouteWeights)
         # Планка достаточности на все ходы: число от 0 до 1 это обязательная вероятность лайка,
         # калибровка к ней подбирается по журналу человеческих отзывов; готовая SufficiencyBar
         # берется как есть. None означает выбор по метрике R без планки
@@ -223,6 +229,15 @@ class FaiRouter:
             prompt_tokens, completion_tokens = OpenRouterClient.usage(data)
             return Completion(data["choices"][0]["message"]["content"] or "", prompt_tokens, completion_tokens)
 
+        # Все кандидаты стартуют с начальных весов по рейтингам: долгая разведка не нужна, и
+        # множитель температуры берется пониженный. Хотя бы один без рейтингов, тогда общий
+        from fai_router.training import benchmark_prior
+
+        informed = snapshot is not None and all(
+            benchmark_prior.vector(snapshot, model_id) is not None for model_id in model_ids)
+        if informed:
+            kwargs.setdefault("temperature_scale", Settings.PRIOR_TEMPERATURE_SCALE)
+
         judge = OpenRouterClient(api_key, judge_model, timeout=timeout, base_url=base_url)
         return cls(candidates, execute, database_path, llm=judge, **kwargs)
 
@@ -245,7 +260,7 @@ class FaiRouter:
 
         turns = sum(1 for m in messages if m.get("role") == "user")
         trace = env.route(prompt, self.candidates, self.topk, required,
-                          weights=RouteWeights.profile(weights) or self.route_weights, turns=turns,
+                          weights=self._weights_for(weights), turns=turns,
                           bar=self.sufficiency_bar(self.bar if bar is None else bar))
         completion = env.execute(trace, lambda candidate: self._execute(candidate, messages))
         if isinstance(completion, str):
@@ -265,6 +280,20 @@ class FaiRouter:
             if answer.assessment is not None:
                 self.traces.set_feedback(answer.round_id, Feedback(FeedbackType.AUTO, answer.assessment))
         return answer
+
+    def _weights_for(self, weights: "RouteWeights | str | None") -> RouteWeights | None:
+        """Веса хода: названные для хода, иначе веса роутера, иначе общие из Settings. Свой
+        множитель температуры роутера подставляется в веса по умолчанию и в именованные профили;
+        веса, переданные готовым RouteWeights, берутся как есть."""
+        if isinstance(weights, RouteWeights):
+            return weights
+        named = RouteWeights.profile(weights)
+        if named is None and self._explicit_weights:
+            return self.route_weights
+        chosen = named or self.route_weights
+        if self.temperature_scale is None:
+            return chosen
+        return replace(chosen or Settings.current(), temperature_scale=self.temperature_scale)
 
     def sufficiency_bar(self, bar: "float | SufficiencyBar | None") -> SufficiencyBar | None:
         """Планка для хода. Готовая SufficiencyBar берется как есть. Число это уровень, а

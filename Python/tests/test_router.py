@@ -342,3 +342,26 @@ def test_custom_bar_marks_shortfall_and_takes_the_strongest(tmp_path):
     bare = FaiRouter(router.candidates, lambda c, m: "", measure=False, bar=0.7)
     with pytest.raises(RuntimeError, match="журнала"):
         bare.ask("Напиши научный обзор на 1500 знаков.")
+
+
+def test_factory_lowers_temperature_only_for_rated_candidates(monkeypatch):
+    """Все кандидаты из рейтингов: фабрика ставит пониженный множитель температуры, и он доходит
+    до хода вместе с профилем. Хотя бы один без рейтингов либо роутер собран конструктором: общий."""
+    from fai_router import catalog, env
+    from fai_router.settings import RouteWeights
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: [])
+    rated = FaiRouter.from_openai_compatible("https://example.test/v1", "k", ["anthropic/claude-opus-4.7"],
+                                             prices={"anthropic/claude-opus-4.7": (15, 75)}, measure=False)
+    assert rated.temperature_scale == Settings.PRIOR_TEMPERATURE_SCALE == 10.0
+    assert rated._weights_for(None).temperature_scale == 10.0
+    assert rated._weights_for("price") == RouteWeights(0.3, 0.60, 0.10, 10.0)
+    # Готовые веса с собственным множителем берутся как есть
+    own = RouteWeights(0.5, 0.25, 0.25, 42.0)
+    assert rated._weights_for(own) is own
+
+    mixed = FaiRouter.from_openai_compatible(
+        "https://example.test/v1", "k", ["anthropic/claude-opus-4.7", "my/own-model"],
+        prices={"anthropic/claude-opus-4.7": (15, 75), "my/own-model": (1, 2)}, measure=False)
+    assert mixed.temperature_scale is None and mixed._weights_for(None) is None
+    assert mixed._weights_for("quality").temperature_scale == Settings.temperature_scale == 30.0

@@ -17,15 +17,23 @@ QUALITY_FIRST = RouteWeights(WQ=1.0, WC=0.05, WT=0.05, temperature_scale=0)
 
 
 def test_calibration_matches_csharp_version():
+    """Стягивание по умолчанию 0,1; числа для прежнего стягивания 1 сохранены как вторая сверка."""
     fitted = Calibration.fit(PAIRS)
-    assert fitted.A == pytest.approx(0.6040727816122299, abs=1e-9)
-    assert fitted.B == pytest.approx(0.08713282758760345, abs=1e-9)
-    assert fitted.predict(0.5) == pytest.approx(0.5960826895510254, abs=1e-9)
+    assert fitted.A == pytest.approx(3.347648495609008, abs=1e-9)
+    assert fitted.B == pytest.approx(-1.3139404220311586, abs=1e-9)
+    assert fitted.predict(0.5) == pytest.approx(0.5890123112635008, abs=1e-9)
+
+    strong = Calibration.fit(PAIRS, ridge=1.0)
+    assert strong.A == pytest.approx(0.6040727816122299, abs=1e-9)
+    assert strong.B == pytest.approx(0.08713282758760345, abs=1e-9)
+    assert strong.predict(0.5) == pytest.approx(0.5960826895510254, abs=1e-9)
 
 
 def test_weak_ridge_lets_the_slope_show():
     """Наклон стягивается к нулю, пока оценок мало: со слабым стягиванием зависимость видна резче."""
-    assert Calibration.fit(PAIRS, ridge=0.1).A > Calibration.fit(PAIRS).A > 0
+    weak, default, strong = (Calibration.fit(PAIRS, ridge=0.01).A, Calibration.fit(PAIRS).A,
+                             Calibration.fit(PAIRS, ridge=1.0).A)
+    assert weak > default > strong > 0
 
 
 def test_unanimous_ratings_stay_finite():
