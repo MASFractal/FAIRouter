@@ -193,11 +193,17 @@ class FaiRouter:
         при save(), ходы и отзывы при ask() и feedback()."""
         from fai_router import benchmarks as benchmarks_module
         from fai_router import catalog
+        from fai_router.training import benchmark_prior
 
         snapshot = benchmarks_module.resolve(benchmarks)
         if snapshot is None:
             log.warning("Снимок замеров не найден: кандидаты стартуют со случайных весов, "
                         "пока не накопятся отзывы.")
+        # Снимок с чужими именами серий тише пустого: приора не получил бы никто, и роутер молча
+        # стартовал бы со случайных весов, уверенный, что рейтинги у него есть
+        if snapshot is not None and snapshot.entries and benchmark_prior.known_series(snapshot) == 0:
+            raise ValueError("В снимке замеров нет ни одной серии из профилей: он собран другой версией "
+                             "библиотеки. Пересоберите снимок или возьмите снимок из комплекта (benchmarks=None).")
         prices = prices or {}
         speeds = tokens_per_second or {}
         known: dict[str, catalog.ModelInfo] = {}
@@ -231,8 +237,6 @@ class FaiRouter:
 
         # Все кандидаты стартуют с начальных весов по рейтингам: долгая разведка не нужна, и
         # множитель температуры берется пониженный. Хотя бы один без рейтингов, тогда общий
-        from fai_router.training import benchmark_prior
-
         informed = snapshot is not None and all(
             benchmark_prior.vector(snapshot, model_id) is not None for model_id in model_ids)
         if informed:

@@ -56,11 +56,12 @@ class BenchmarkSnapshot:
         Абсолютный смысл прогнозу дает калибровка, поэтому шкала условна."""
         rows = self.entries.get(key, [])
         entry = find(openrouter_id, rows)
-        if entry is None:
-            return None
-        low = min(row.score for row in rows)
-        high = max(row.score for row in rows)
-        return 1.0 if high <= low else (entry.score - low) / (high - low)
+        return None if entry is None else _share(rows, entry.score)
+
+    def shares(self, key: str) -> list[float]:
+        """Качество каждой строки серии на той же шкале, что quality(); пусто, если серии нет."""
+        rows = self.entries.get(key, [])
+        return [_share(rows, row.score) for row in rows]
 
     def save(self, path: str) -> None:
         with open(path, "w", encoding="utf-8") as file:
@@ -127,6 +128,12 @@ def default_snapshot() -> BenchmarkSnapshot | None:
         if path.is_file():
             return BenchmarkSnapshot.load(str(path))
     return None
+
+
+def _share(rows: list[BenchmarkEntry], score: float) -> float:
+    low = min(row.score for row in rows)
+    high = max(row.score for row in rows)
+    return 1.0 if high <= low else (score - low) / (high - low)
 
 
 def resolve(source: "BenchmarkSnapshot | str | None") -> BenchmarkSnapshot | None:

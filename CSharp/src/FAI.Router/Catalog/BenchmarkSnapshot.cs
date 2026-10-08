@@ -45,13 +45,23 @@ public sealed class BenchmarkSnapshot
         List<BenchmarkEntry> rows = Entries.GetValueOrDefault(key) ?? [];
         BenchmarkEntry? entry = ModelNames.Find(openRouterId, rows);
 
-        if (entry is null)
-            return null;
+        return entry is null ? null : Share(rows, entry.Score);
+    }
 
+    /// <summary>Качество каждой строки серии на той же шкале, что <see cref="Quality"/>; пусто, если серии нет</summary>
+    public IReadOnlyList<double> Shares(string key)
+    {
+        List<BenchmarkEntry> rows = Entries.GetValueOrDefault(key) ?? [];
+
+        return [.. rows.Select(row => Share(rows, row.Score))];
+    }
+
+    private static double Share(List<BenchmarkEntry> rows, double score)
+    {
         double low = rows.Min(row => row.Score);
         double high = rows.Max(row => row.Score);
 
-        return high <= low ? 1.0 : (entry.Score - low) / (high - low);
+        return high <= low ? 1.0 : (score - low) / (high - low);
     }
 
     /// <summary>Снимок, обрезанный до первых count строк каждой серии: для тестов и работы без сети</summary>

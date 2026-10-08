@@ -18,10 +18,20 @@ class InputFeaturesService:
 
     @classmethod
     def get_features(cls, text: str) -> InputFeatures:
-        """Признаки объема без обращения к модели."""
+        """Признаки без обращения к модели: объем по длине текста, задание как у типовой задачи.
+
+        Задание без распознавания неизвестно, а пустая спецификация это не «неизвестно», а крайняя
+        точка: стиль «нет», читаемость и формальность ноль. Прогноз качества проецировался на это
+        случайное направление, и порядок кандидатов не совпадал даже с их общей силой. Замер «выбрось
+        серию рейтингов и предскажи ее» (docs/research/prior-holdout.md): лидер угадан в 3,7 % серий
+        против 27,2 % со спецификацией типовой задачи и 34,6 % с полным распознаванием."""
+        # Импорт здесь: приор рейтингов сам строится на признаках задачи
+        from fai_router.training import benchmark_prior
+
         return InputFeatures(
             input_len=len(text) / cls.EST_SYMBOL_PER_TOKEN,
             len_answer=2 * len(text) / cls.EST_SYMBOL_PER_TOKEN,
+            input_specifications=benchmark_prior.typical_task().input_specifications,
         )
 
     @classmethod

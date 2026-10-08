@@ -86,11 +86,31 @@ def vector(snapshot: "BenchmarkSnapshot", openrouter_id: str) -> np.ndarray | No
     return from_measurements(pairs) if pairs else None
 
 
+def known_series(snapshot: "BenchmarkSnapshot") -> int:
+    """Сколько серий снимка известно профилям. Ноль означает, что снимок собран под другие имена
+    серий: приора по нему не получит ни одна модель, и это тише пустого снимка."""
+    return sum(1 for key in PROFILES if key in snapshot.entries)
+
+
+def field_quality(snapshot: "BenchmarkSnapshot") -> float | None:
+    """Уровень поля: средняя доля качества по всем строкам серий, известных профилям. С него
+    стартует модель, которой в рейтингах нет (uniform()); None, если известных серий нет.
+
+    Качество в серии это доля между худшим и лучшим, и даже у сильнейших моделей в среднем по
+    сериям оно около половины: лидер в каждой серии свой. Балл возможностей каталога лежит на другой
+    шкале, около 0.8 у любой современной модели, и подставленный в uniform() напрямую он ставил
+    незнакомую модель выше всех оцененных на любой задаче."""
+    shares = [share for key in PROFILES for share in snapshot.shares(key)]
+    return float(np.mean(shares)) if shares else None
+
+
 def uniform(quality: float) -> np.ndarray:
     """Начальный вектор модели без рейтингов: качество одинаково во всех сериях.
 
     Та же подгонка по тем же профилям, что у vector(), поэтому шкала общая с моделями из рейтингов:
-    вектор по одной опорной задаче сжимается иначе, и безрейтинговая модель обгоняла рейтинговые."""
+    вектор по одной опорной задаче сжимается иначе, и безрейтинговая модель обгоняла рейтинговые.
+    Качество задается на шкале серий: незнакомой модели подходит уровень поля (field_quality()), а
+    балл каталога годится лишь как множитель к нему, не вместо него."""
     return from_measurements([(item.feature_vector(), 1.0) for tasks in PROFILES.values() for item in tasks]) * quality
 
 

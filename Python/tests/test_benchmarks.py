@@ -139,3 +139,32 @@ def test_catalog_element_uses_benchmarks():
     assert primed.tps == pytest.approx(180.0)
     assert primed.cost_ratio == pytest.approx(1 / 0.6)
     assert np.allclose(primed.ideal_match_vector, benchmark_prior.vector(snapshot(), model.id))
+
+
+def test_known_series_and_field_quality():
+    """Уровень поля: средняя доля качества по строкам известных серий; серии скорости и цены в него
+    не входят. Снимок под другие имена серий профилям неизвестен: приора по нему нет ни у кого."""
+    shot = snapshot()
+    assert benchmark_prior.known_series(shot) == 2
+    # Число общее с C#-тестом: четыре доли серии кода (1, 220.5/240.9, 100/240.9, 0) и две серии прозы (0, 1)
+    assert benchmark_prior.field_quality(shot) == pytest.approx((1 + 220.5 / 240.9 + 100 / 240.9 + 0 + 0 + 1) / 6)
+
+    foreign = BenchmarkSnapshot(shot.fetched_at, {"old:text/coding": list(PREFERENCE_ROWS)})
+    assert benchmark_prior.known_series(foreign) == 0
+    assert benchmark_prior.field_quality(foreign) is None
+    assert benchmark_prior.vector(foreign, "anthropic/claude-opus-4.7") is None
+
+
+def test_features_without_recognition_take_the_typical_task():
+    """Без распознавания задание неизвестно, и признаки берут спецификацию типовой задачи, а не
+    пустую: пустая проецировала прогноз на случайное направление (docs/research/prior-holdout.md)."""
+    from fai_router.services import InputFeaturesService
+
+    features = InputFeaturesService.get_features("привет")
+    typical = benchmark_prior.typical_task().input_specifications
+
+    assert features.input_specifications.style_type == typical.style_type
+    assert features.input_specifications.symbol_length == typical.symbol_length
+    assert features.input_len == pytest.approx(len("привет") / InputFeaturesService.EST_SYMBOL_PER_TOKEN)
+    # Объект свой у каждого вызова: правка признаков одного хода не трогает следующий
+    assert features.input_specifications is not InputFeaturesService.get_features("привет").input_specifications

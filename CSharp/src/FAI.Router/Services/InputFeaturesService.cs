@@ -1,4 +1,5 @@
 using FAI.Router.RotationTracking;
+using FAI.Router.Training;
 
 namespace FAI.Router.Services;
 
@@ -34,19 +35,22 @@ public class InputFeaturesService
     }
 
     /// <summary>
-    /// Отдает признаки объема текста (промпта) без обращения к модели
+    /// Признаки без обращения к модели: объем по длине текста, задание как у типовой задачи
     /// </summary>
+    /// <remarks>
+    /// Задание без распознавания неизвестно, а пустая спецификация это не «неизвестно», а крайняя
+    /// точка: стиль «нет», читаемость и формальность ноль. Прогноз качества проецировался на это
+    /// случайное направление, и порядок кандидатов не совпадал даже с их общей силой. Замер «выбрось
+    /// серию рейтингов и предскажи ее» (docs/research/prior-holdout.md): лидер угадан в 3,7 % серий
+    /// против 27,2 % со спецификацией типовой задачи и 34,6 % с полным распознаванием.
+    /// </remarks>
     /// <param name="text">Текст</param>
-    public static InputFeatures GetFeatures(string text) 
+    public static InputFeatures GetFeatures(string text) => new()
     {
-        InputFeatures features = new InputFeatures
-        {
-            InputLen = GetLenInput(text),
-            LenAnswer = GetLenAnswer(text)
-        };
-
-        return features;
-    }
+        InputLen = GetLenInput(text),
+        LenAnswer = GetLenAnswer(text),
+        InputSpecifications = BenchmarkPrior.TypicalTask().InputSpecifications,
+    };
 
     /// <summary>
     /// Получить оценку длинны

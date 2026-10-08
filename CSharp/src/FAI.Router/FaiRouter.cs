@@ -260,6 +260,13 @@ public class FaiRouter
         prices ??= new Dictionary<string, Price>();
         benchmarks ??= BenchmarkSnapshot.LoadEmbedded();
 
+        // Снимок с чужими именами серий тише пустого: приора не получил бы никто, и роутер молча
+        // стартовал бы со случайных весов, уверенный, что рейтинги у него есть
+        if (benchmarks.Entries.Count > 0 && BenchmarkPrior.KnownSeries(benchmarks) == 0)
+            throw new ArgumentException(
+                "В снимке замеров нет ни одной серии из профилей: он собран другой версией библиотеки. "
+                + "Пересоберите снимок или возьмите снимок из комплекта (benchmarks: null).", nameof(benchmarks));
+
         Dictionary<string, ModelInfo> known = [];
         bool named = requested.Length == 1 && (string.Equals(requested[0], ModelCatalog.All, StringComparison.OrdinalIgnoreCase)
             || string.Equals(requested[0], ModelCatalog.Popular, StringComparison.OrdinalIgnoreCase));

@@ -365,3 +365,16 @@ def test_factory_lowers_temperature_only_for_rated_candidates(monkeypatch):
         prices={"anthropic/claude-opus-4.7": (15, 75), "my/own-model": (1, 2)}, measure=False)
     assert mixed.temperature_scale is None and mixed._weights_for(None) is None
     assert mixed._weights_for("quality").temperature_scale == Settings.temperature_scale == 30.0
+
+
+def test_factory_refuses_snapshot_with_foreign_series_names(monkeypatch):
+    """Снимок под другие имена серий тише пустого: приора не получил бы никто, а роутер молча
+    стартовал бы со случайных весов, уверенный, что рейтинги у него есть."""
+    from fai_router import catalog
+    from fai_router.benchmarks import BenchmarkEntry, BenchmarkSnapshot
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: (_ for _ in ()).throw(AssertionError("сеть не нужна")))
+    foreign = BenchmarkSnapshot("2026-09-14T00:00:00+00:00", {"old:text/coding": [BenchmarkEntry("m", "m", "o", 1.0)]})
+    with pytest.raises(ValueError, match="серии из профилей"):
+        FaiRouter.from_openai_compatible("https://example.test/v1", "ключ", ["my/own-model"],
+                                         prices={"my/own-model": (1.0, 2.0)}, benchmarks=foreign, measure=False)
