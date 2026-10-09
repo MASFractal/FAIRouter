@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -23,6 +24,12 @@ public sealed class BenchmarkSnapshot
 {
     internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    /// <summary>
+    /// Индексы серий по каноническому имени. Поиск зовут на каждую модель каталога и каждую серию при
+    /// каждом выборе, и разбор имен всех строк серии на каждый вызов занимал секунды на выбор.
+    /// </summary>
+    private readonly ConditionalWeakTable<List<BenchmarkEntry>, SeriesIndex> _indexes = new();
+
     [JsonPropertyName("fetched_at")]
     public string FetchedAt { get; set; } = "";
 
@@ -31,7 +38,7 @@ public sealed class BenchmarkSnapshot
 
     /// <summary>Запись модели каталога в серии; нет, значит <c>null</c></summary>
     public BenchmarkEntry? Find(string key, string openRouterId) =>
-        ModelNames.Find(openRouterId, Entries.GetValueOrDefault(key) ?? []);
+        Entries.GetValueOrDefault(key) is { } rows ? IndexOf(rows).Find(openRouterId) : null;
 
     /// <summary>Сама оценка модели в серии (скорость, доля рассуждений); нет модели, значит <c>null</c></summary>
     public double? Value(string key, string openRouterId) => Find(key, openRouterId)?.Score;
@@ -42,10 +49,10 @@ public sealed class BenchmarkSnapshot
     /// </summary>
     public double? Quality(string key, string openRouterId)
     {
-        List<BenchmarkEntry> rows = Entries.GetValueOrDefault(key) ?? [];
-        BenchmarkEntry? entry = ModelNames.Find(openRouterId, rows);
+        if (Entries.GetValueOrDefault(key) is not { } rows) return null;
+        SeriesIndex index = IndexOf(rows);
 
-        return entry is null ? null : Share(rows, entry.Score);
+        return index.Find(openRouterId) is { } entry ? index.Share(entry.Score) : null;
     }
 
     /// <summary>Качество каждой строки серии на той же шкале, что <see cref="Quality"/>; пусто, если серии нет</summary>
@@ -93,6 +100,45 @@ public sealed class BenchmarkSnapshot
         return JsonSerializer.Deserialize<BenchmarkSnapshot>(stream) ?? new BenchmarkSnapshot();
     }
 
+    /// <summary>Индекс серии; список, выросший после построения, индексируется заново.</summary>
+    private SeriesIndex IndexOf(List<BenchmarkEntry> rows)
+    {
+        if (_indexes.TryGetValue(rows, out SeriesIndex? index) && index.Count == rows.Count)
+            return index;
+
+        index = new SeriesIndex(rows);
+        _indexes.AddOrUpdate(rows, index);
+        return index;
+    }
+
+    /// <summary>
+    /// Серия, разобранная один раз: лучшая запись на каждое каноническое имя по правилу
+    /// <see cref="ModelNames.Find"/> и границы оценок для <see cref="Share"/>.
+    /// </summary>
+    private sealed class SeriesIndex
+    {
+        private readonly Dictionary<string, BenchmarkEntry> _best = [];
+        private readonly double _low;
+        private readonly double _high;
+
+        public SeriesIndex(List<BenchmarkEntry> rows)
+        {
+            Count = rows.Count;
+            _low = rows.Count == 0 ? 0 : rows.Min(row => row.Score);
+            _high = rows.Count == 0 ? 0 : rows.Max(row => row.Score);
+
+            foreach (BenchmarkEntry row in rows)
+                foreach (string name in new[] { ModelNames.Canonical(row.DisplayName), ModelNames.Canonical(row.ModelKey) }.Distinct())
+                    if (!_best.TryGetValue(name, out BenchmarkEntry? best) || ModelNames.Better(row, best))
+                        _best[name] = row;
+        }
+
+        public int Count { get; }
+
+        public BenchmarkEntry? Find(string openRouterId) => _best.GetValueOrDefault(ModelNames.Canonical(openRouterId));
+
+        public double Share(double score) => _high <= _low ? 1.0 : (score - _low) / (_high - _low);
+    }
 }
 
 /// <summary>
@@ -140,13 +186,18 @@ public static partial class ModelNames
     public static BenchmarkEntry? Find(string openRouterId, IEnumerable<BenchmarkEntry> entries)
     {
         string wanted = Canonical(openRouterId);
+        BenchmarkEntry? best = null;
 
-        return entries
-            .Where(row => Canonical(row.DisplayName) == wanted || Canonical(row.ModelKey) == wanted)
-            .OrderByDescending(row => row.Votes)
-            .ThenBy(row => row.ModelKey.Length)
-            .FirstOrDefault();
+        foreach (BenchmarkEntry row in entries)
+            if ((Canonical(row.DisplayName) == wanted || Canonical(row.ModelKey) == wanted) && (best is null || Better(row, best)))
+                best = row;
+
+        return best;
     }
+
+    /// <summary>Запись лучше другой той же модели: больше голосов, при равных короче ключ; при полном равенстве остается прежняя</summary>
+    internal static bool Better(BenchmarkEntry row, BenchmarkEntry than) =>
+        row.Votes > than.Votes || (row.Votes == than.Votes && row.ModelKey.Length < than.ModelKey.Length);
 
     /// <summary>Часть ключа серии из названия источника: «Finance/Investing» становится «finance-investing»</summary>
     public static string Slug(string name) => NonAlphanumeric().Replace(name.ToLowerInvariant(), "-").Trim('-');
