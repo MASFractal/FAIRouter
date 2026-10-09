@@ -31,6 +31,9 @@ public static class BenchmarkPrior
     /// <summary>Серии с долей рассуждений в цене задачи: по ним считается начальная поправка цены</summary>
     private const string ReasoningShare = "bench:reasoning-share/";
 
+    /// <summary>Серия скорости, токенов в секунду</summary>
+    private const string Speed = "bench:speed";
+
     private const string ResourceName = "FAI.Router.benchmark_profiles.json";
 
     // Имена полей в файле змеиные, перечисления записаны именами, как в версии на Python
@@ -52,29 +55,34 @@ public static class BenchmarkPrior
     public static InputFeatures TypicalTask() => Task(new JsonObject());
 
     /// <summary>Пары «вектор задачи, качество» для FromMeasurements по всем сериям, где модель есть</summary>
-    public static IReadOnlyList<(Vector Task, double Quality)> Measurements(BenchmarkSnapshot snapshot, string openRouterId)
+    public static IReadOnlyList<(Vector Task, double Quality)> Measurements(BenchmarkSnapshot snapshot, string openRouterId) =>
+        [.. Points(snapshot, openRouterId).Select(point => (point.Task, point.Quality))];
+
+    /// <summary>
+    /// Начальный вектор кандидата по рейтингам в пространстве общего среднего
+    /// <see cref="Settings.TaskMean"/>; <c>null</c>, если модели нет ни в одной серии
+    /// </summary>
+    public static Vector? GetVector(BenchmarkSnapshot snapshot, string openRouterId) =>
+        GetVector(snapshot, openRouterId, Settings.TaskMean);
+
+    /// <summary>
+    /// Начальный вектор кандидата по рейтингам в пространстве среднего <paramref name="mean"/>;
+    /// <c>null</c>, если модели нет ни в одной серии
+    /// </summary>
+    /// <remarks>
+    /// Точка серии весит 1/(число профилей серии): серия весит одинаково, сколько бы профилей задач за
+    /// ней ни стояло. Прежде серия с четырьмя профилями тянула прогноз вчетверо сильнее серии с одним.
+    /// </remarks>
+    /// <param name="snapshot">Снимок замеров</param>
+    /// <param name="openRouterId">Идентификатор модели в каталоге</param>
+    /// <param name="mean">Среднее задач; пусто, значит без вычитания</param>
+    public static Vector? GetVector(BenchmarkSnapshot snapshot, string openRouterId, Vector? mean)
     {
-        List<(Vector, double)> pairs = [];
+        (Vector Task, double Quality, double Weight)[] points = [.. Points(snapshot, openRouterId)];
 
-        foreach ((string key, IReadOnlyList<InputFeatures> tasks) in Profiles)
-        {
-            double? quality = snapshot.Quality(key, openRouterId);
-
-            if (quality is null)
-                continue;
-
-            pairs.AddRange(tasks.Select(task => (task.FeatureVector, quality.Value)));
-        }
-
-        return pairs;
-    }
-
-    /// <summary>Начальный вектор кандидата по рейтингам; <c>null</c>, если модели нет ни в одной серии</summary>
-    public static Vector? GetVector(BenchmarkSnapshot snapshot, string openRouterId)
-    {
-        IReadOnlyList<(Vector Task, double Quality)> pairs = Measurements(snapshot, openRouterId);
-
-        return pairs.Count == 0 ? null : QualityPrior.FromMeasurements(pairs);
+        return points.Length == 0
+            ? null
+            : QualityPrior.Fit([.. points.Select(point => (point.Task, point.Quality))], [.. points.Select(point => point.Weight)], mean);
     }
 
     /// <summary>
@@ -85,28 +93,36 @@ public static class BenchmarkPrior
 
     /// <summary>
     /// Уровень поля: средняя доля качества по всем строкам серий, известных профилям. С него стартует
-    /// модель, которой в рейтингах нет (<see cref="Uniform"/>); <c>null</c>, если известных серий нет
+    /// модель, которой в рейтингах нет (<see cref="Uniform(double)"/>); <c>null</c>, если известных серий нет
     /// </summary>
     /// <remarks>
     /// Качество в серии это доля между худшим и лучшим (<see cref="BenchmarkSnapshot.Quality"/>), и даже у
     /// сильнейших моделей в среднем по сериям оно около половины: лидер в каждой серии свой. Балл
     /// возможностей каталога лежит на другой шкале, около 0,8 у любой современной модели, и подставленный
-    /// в <see cref="Uniform"/> напрямую он ставил незнакомую модель выше всех оцененных на любой задаче
+    /// в <see cref="Uniform(double)"/> напрямую он ставил незнакомую модель выше всех оцененных на любой задаче.
+    /// Если снимок несет среднюю полной серии (<see cref="SeriesBounds.Mean"/>), берется она: строки
+    /// обрезанного снимка это верх серии, и средняя по ним завышала бы уровень поля.
     /// </remarks>
     public static double? FieldQuality(BenchmarkSnapshot snapshot)
     {
-        double[] shares = [.. Profiles.Keys.SelectMany(snapshot.Shares)];
+        (double Share, int Count)[] series = [.. Profiles.Keys
+            .Select(snapshot.MeanShare)
+            .Where(share => share is not null)
+            .Select(share => share!.Value)];
 
-        return shares.Length == 0 ? null : shares.Average();
+        int rows = series.Sum(item => item.Count);
+
+        return rows == 0 ? null : series.Sum(item => item.Share * item.Count) / rows;
     }
 
     /// <summary>
     /// Начальный вектор модели без рейтингов: качество <paramref name="quality"/> одинаково во всех сериях
     /// </summary>
     /// <remarks>
-    /// Строится той же подгонкой по тем же профилям задач, что <see cref="GetVector"/>, и потому лежит на
-    /// одной шкале с моделями из рейтингов. Вектор по одной опорной задаче сжимается подгонкой иначе, чем
-    /// вектор по полусотне точек, и безрейтинговая модель со средним баллом обгоняла сильнейшие рейтинговые.
+    /// Строится той же подгонкой по тем же профилям задач, что <see cref="GetVector(BenchmarkSnapshot, string)"/>,
+    /// и потому лежит на одной шкале с моделями из рейтингов. Вектор по одной опорной задаче сжимается
+    /// подгонкой иначе, чем вектор по полусотне точек, и безрейтинговая модель со средним баллом обгоняла
+    /// сильнейшие рейтинговые.
     /// <para>
     /// Качество задается на шкале серий: незнакомой модели подходит уровень поля
     /// (<see cref="FieldQuality"/>), а балл каталога годится лишь как множитель к нему, не вместо него.
@@ -114,24 +130,44 @@ public static class BenchmarkPrior
     /// <para>
     /// Подгонка линейна по качеству, поэтому считается один раз для единицы и умножается: безрейтинговых
     /// моделей в каталоге сотни, и подгонка на каждую задерживала бы первый ход после обновления рейтингов.
-    /// Запомненный вектор привязан к среднему задач (<see cref="Settings.TaskMean"/>): сменилось оно — считаем заново.
+    /// Запомненный вектор привязан к среднему задач: сменилось оно, считаем заново. Точки весят так же,
+    /// как в <see cref="GetVector(BenchmarkSnapshot, string, Vector?)"/>.
     /// </para>
     /// </remarks>
     /// <param name="quality">Качество от 0 до 1 на шкале серий снимка</param>
-    public static Vector Uniform(double quality)
+    public static Vector Uniform(double quality) => Uniform(quality, Settings.TaskMean);
+
+    /// <summary>Как <see cref="Uniform(double)"/>, в пространстве среднего <paramref name="mean"/></summary>
+    /// <param name="quality">Качество от 0 до 1 на шкале серий снимка</param>
+    /// <param name="mean">Среднее задач; пусто, значит без вычитания</param>
+    public static Vector Uniform(double quality, Vector? mean)
     {
         UniformUnit? unit = _uniform;
 
-        if (unit is null || !ReferenceEquals(unit.Mean, Settings.TaskMean))
-            _uniform = unit = new UniformUnit(Settings.TaskMean,
-                QualityPrior.FromMeasurements([.. Profiles.Values.SelectMany(tasks => tasks).Select(task => (task.FeatureVector, 1.0))]));
+        if (unit is null || !ReferenceEquals(unit.Mean, mean))
+        {
+            (Vector Task, double Quality, double Weight)[] points =
+                [.. Profiles.Values.SelectMany(tasks => tasks.Select(task => (task.FeatureVector, 1.0, 1.0 / tasks.Count)))];
+
+            _uniform = unit = new UniformUnit(mean,
+                QualityPrior.Fit([.. points.Select(point => (point.Task, point.Quality))], [.. points.Select(point => point.Weight)], mean));
+        }
 
         return unit.Vector * quality;
     }
 
     /// <summary>Скорость модели по внешнему замеру, токенов в секунду; нет замера, значит <c>null</c></summary>
     public static double? TokensPerSecond(BenchmarkSnapshot snapshot, string openRouterId) =>
-        snapshot.Value("bench:speed", openRouterId) is > 0 and var speed ? speed : null;
+        snapshot.Value(Speed, openRouterId) is > 0 and var speed ? speed : null;
+
+    /// <summary>
+    /// Скорость модели, которой в серии скорости нет: нижняя граница серии. Серия во встроенном снимке
+    /// обрезана до самых быстрых, и модель вне нее медленнее последней строки, но не в разы: прежнее
+    /// умолчание 50 токенов в секунду делало модель на 160 втрое медленнее модели на 170. Серии нет,
+    /// значит <c>null</c>.
+    /// </summary>
+    public static double? DefaultTokensPerSecond(BenchmarkSnapshot snapshot) =>
+        snapshot.BoundsOf(Speed) is { Low: > 0 } bounds ? bounds.Low : null;
 
     /// <summary>
     /// Начальная поправка цены: задача обходится дороже прайса ответа на долю рассуждений. Среднее
@@ -141,8 +177,7 @@ public static class BenchmarkPrior
     {
         double[] shares =
         [
-            .. snapshot.Entries.Keys
-                .Where(key => key.StartsWith(ReasoningShare, StringComparison.Ordinal))
+            .. snapshot.KeysStartingWith(ReasoningShare)
                 .Select(key => snapshot.Value(key, openRouterId))
                 .Where(share => share is not null)
                 .Select(share => share!.Value)
@@ -175,6 +210,15 @@ public static class BenchmarkPrior
             TurnCount = (item["turn_count"] ?? baseTask["turn_count"])!.GetValue<int>(),
             InputSpecifications = spec.Deserialize<Specifications>(SpecOptions) ?? new Specifications(),
         };
+    }
+
+    // Точки подгонки: задача профиля, качество модели в серии и вес 1/(число профилей серии)
+    private static IEnumerable<(Vector Task, double Quality, double Weight)> Points(BenchmarkSnapshot snapshot, string openRouterId)
+    {
+        foreach ((string key, IReadOnlyList<InputFeatures> tasks) in Profiles)
+            if (snapshot.Quality(key, openRouterId) is { } quality)
+                foreach (InputFeatures task in tasks)
+                    yield return (task.FeatureVector, quality, 1.0 / tasks.Count);
     }
 
     private static void Merge(JsonObject target, JsonObject source)

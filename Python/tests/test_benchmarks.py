@@ -3,6 +3,8 @@
 Ожидаемые числа общие с C#-тестом (Mas.Core.Tests/RouterBenchmarkTests.cs): расхождение версий
 видно по расхождению чисел."""
 
+import json
+
 import numpy as np
 import pytest
 
@@ -168,3 +170,160 @@ def test_features_without_recognition_take_the_typical_task():
     assert features.input_len == pytest.approx(len("привет") / InputFeaturesService.EST_SYMBOL_PER_TOKEN)
     # Объект свой у каждого вызова: правка признаков одного хода не трогает следующий
     assert features.input_specifications is not InputFeaturesService.get_features("привет").input_specifications
+
+
+# Каталог поставщика, кандидаты из него, снимок и имена: те же проверки, что в CatalogTests.cs
+
+
+def test_openrouter_catalog_survives_broken_items():
+    """Битая запись пропускается, а не роняет весь каталог; цена без данных неизвестна, а не бесплатна."""
+    text = json.dumps({"data": [
+        {"id": "ok/model", "name": "Ok", "pricing": {"prompt": "0.000001", "completion": 0.000002, "web_search": "0.01"},
+         "context_length": 128000.5, "top_provider": {"max_completion_tokens": "4096"},
+         "architecture": {"input_modalities": None}, "supported_parameters": ["tools", 5]},
+        {"name": "без идентификатора"},
+        {"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}},
+        {"id": "auto/model", "pricing": {"prompt": "-1", "completion": "-1"}},
+        {"id": "noprice/model", "pricing": None, "architecture": "строка"},
+        "мусор", None,
+    ]}, ensure_ascii=False)
+    models = {model.id: model for model in catalog.parse(text)}
+    assert list(models) == ["ok/model", "free/model", "auto/model", "noprice/model"]
+    ok = models["ok/model"]
+    assert ok.dollars_per_million_input == pytest.approx(1) and ok.dollars_per_million_output == pytest.approx(2)
+    assert (ok.context_tokens, ok.max_answer_tokens) == (128000, 4096)
+    assert ok.capabilities == (catalog.Capability.CODE | catalog.Capability.FORMULAS | catalog.Capability.TOOLS
+                               | catalog.Capability.WEB_SEARCH)
+    assert models["free/model"].dollars_per_million_input == 0
+    assert models["auto/model"].dollars_per_million_input < 0
+    assert models["noprice/model"].dollars_per_million_output < 0
+    assert "noprice/model" not in catalog.select("all", models)[0]
+
+
+def test_fractalrouter_catalog_survives_broken_items():
+    text = json.dumps([
+        {"id": "a/model", "pricing": {"prompt_rub_per_1m": "12,5", "completion_rub_per_1m": 50},
+         "modalities": ["text", "image"], "max_completion_tokens": 2048.7},
+        {"id": "b/model", "pricing": "нет", "modalities": None},
+        {"id": 17},
+    ], ensure_ascii=False)
+    models = {model.id: model for model in catalog.parse_fractalrouter(text)}
+    assert models["a/model"].dollars_per_million_input == pytest.approx(12.5)
+    assert models["a/model"].max_answer_tokens == 2048
+    assert models["a/model"].capabilities & catalog.Capability.VISION
+    assert models["b/model"].dollars_per_million_input < 0
+    assert len(models) == 3
+
+
+def test_candidates_keep_catalog_capabilities_and_skip_repeats():
+    """Цена из prices поверх каталога не стирает возможностей модели; модель только из prices
+    считается способной на все; повтор в списке не роняет роутер."""
+    capability = catalog.Capability
+    known = {"a/model": catalog.ModelInfo("a/model", "A", 1, 2, 100_000, 4_000, capability.CODE | capability.VISION),
+             "auto/model": catalog.ModelInfo("auto/model", "Auto", -1, -1, 0, 0, capability.CODE)}
+    prices = {"a/model": (3, 4), "x/model": (5, 6)}
+    candidates = catalog.create_candidates(["a/model", "a/model", "x/model", "auto/model"], known, prices, task_mean=None)
+    assert [c.name for c in candidates] == ["a/model", "x/model", "auto/model"]
+    assert candidates[0].capabilities == capability.CODE | capability.VISION
+    assert candidates[0].dpmt_inp == 3 and candidates[0].context_window == 100_000
+    assert candidates[1].capabilities == capability.ALL
+    assert not candidates[2].has_known_price
+
+
+def test_unrated_model_starts_from_the_field_level():
+    """Модель без рейтингов получает уровень поля, а не случайный вектор; скорость вне серии это
+    нижняя граница серии, а не 50."""
+    from fai_router.benchmarks import default_snapshot
+
+    shot = default_snapshot()
+    unknown = catalog.ModelInfo("vendor/never-rated-model-x", "X", 1, 2, 0, 0, catalog.Capability.ALL)
+    first = catalog.create_element(unknown, None, shot, None)
+    second = catalog.create_element(unknown, None, shot, None)
+    assert np.array_equal(first.ideal_match_vector, second.ideal_match_vector)
+    assert first.prior_experience == 0
+    assert first.tps == pytest.approx(min(row.score for row in shot.entries["bench:speed"]))
+    assert np.allclose(first.ideal_match_vector,
+                       benchmark_prior.uniform(benchmark_prior.field_quality(shot), None))
+
+
+def test_uniform_is_linear_and_on_the_rated_scale():
+    """uniform считается один раз для единицы: вектор линеен по качеству, а безрейтинговая модель с
+    уровнем поля не обгоняет сильнейшие рейтинговые."""
+    from fai_router.benchmarks import default_snapshot
+
+    unit = benchmark_prior.uniform(1.0, None)
+    assert np.allclose(benchmark_prior.uniform(0.4, None), unit * 0.4)
+    shot = default_snapshot()
+    typical = benchmark_prior.typical_task().feature_vector()
+    field = benchmark_prior.field_quality(shot)
+    rated = [benchmark_prior.vector(shot, model_id, None) for model_id in catalog.popular_models()]
+    forecasts = sorted(float(typical @ vector) for vector in rated if vector is not None)
+    assert float(typical @ benchmark_prior.uniform(field, None)) < forecasts[-1]
+
+
+@pytest.mark.parametrize("product, base", [
+    ("qwen/qwen3.8-max", "qwen/qwen3.8"),
+    ("openai/gpt-5.1-codex-max", "openai/gpt-5.1-codex"),
+    ("moonshotai/kimi-k2-thinking", "moonshotai/kimi-k2"),
+])
+def test_product_suffixes_stay_apart(product, base):
+    """Хвосты max и thinking у одних поставщиков означают другой продукт: точное имя их хранит,
+    семейство срезает."""
+    assert canonical(product) != canonical(base)
+    assert canonical(product, relaxed=True) == canonical(base, relaxed=True)
+
+
+def test_claude_thinking_is_the_same_model():
+    assert canonical("anthropic/claude-opus-4.7") == canonical("claude-opus-4-7-thinking-32k")
+    assert canonical("anthropic/claude-opus-4.1") == canonical("claude-opus-4-1-20250805-thinking-16k")
+
+
+def test_find_prefers_exact_names_then_family():
+    thinking = BenchmarkEntry("kimi-k2-thinking", "Kimi K2 Thinking", "Moonshot", 50)
+    plain = BenchmarkEntry("kimi-k2", "Kimi K2", "Moonshot", 40)
+    assert find("moonshotai/kimi-k2-thinking", [plain, thinking]) is thinking
+    assert find("moonshotai/kimi-k2", [plain, thinking]) is plain
+    assert find("moonshotai/kimi-k2", [thinking]) is thinking
+    shot = BenchmarkSnapshot("", {"pref:text/overall": [plain, thinking]})
+    assert shot.find("pref:text/overall", "moonshotai/kimi-k2-thinking") is thinking
+    assert shot.find("pref:text/overall", "moonshotai/kimi-k2") is plain
+
+
+def test_indexed_find_matches_the_scan():
+    from fai_router.benchmarks import default_snapshot
+
+    shot = default_snapshot()
+    names = list(dict.fromkeys("vendor/" + row.model_key for rows in shot.entries.values() for row in rows))[:300]
+    for key, rows in list(shot.entries.items())[:20]:
+        for name in names:
+            assert shot.find(key, name) is find(name, rows)
+
+
+def test_top_keeps_full_series_bounds(tmp_path):
+    """Обрезка снимка хранит границы полной серии: доля качества по обрезку та же, что по полной
+    серии, уровень поля по средней полной серии, а формат обратно совместим."""
+    full = BenchmarkSnapshot("2026-10-01T00:00:00Z", {"pref:text/overall": [
+        BenchmarkEntry("a", "a", "", 1500), BenchmarkEntry("b", "b", "", 1490),
+        BenchmarkEntry("c", "c", "", 1200), BenchmarkEntry("d", "d", "", 1100)]})
+    cut = full.top(2)
+    assert len(cut.entries["pref:text/overall"]) == 2
+    assert cut.quality("pref:text/overall", "vendor/b") == full.quality("pref:text/overall", "vendor/b")
+    assert cut.quality("pref:text/overall", "vendor/b") == pytest.approx(0.975)
+    assert cut.bounds["pref:text/overall"].count == 4
+    assert cut.mean_share("pref:text/overall")[0] == pytest.approx((1322.5 - 1100) / 400)
+
+    plain_path, cut_path = str(tmp_path / "full.json"), str(tmp_path / "cut.json")
+    full.save(plain_path)
+    cut.save(cut_path)
+    with open(plain_path, encoding="utf-8") as file:
+        assert "bounds" not in json.load(file)
+    loaded = BenchmarkSnapshot.load(cut_path)
+    assert loaded.quality("pref:text/overall", "vendor/b") == pytest.approx(0.975)
+
+
+def test_snapshot_age():
+    from datetime import datetime, timedelta, timezone
+
+    old = BenchmarkSnapshot((datetime.now(timezone.utc) - timedelta(days=200)).isoformat(), {})
+    assert old.age_days == pytest.approx(200, abs=0.01)
+    assert BenchmarkSnapshot("не дата", {}).age_days is None

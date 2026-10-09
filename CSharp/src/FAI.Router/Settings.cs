@@ -1,7 +1,4 @@
-﻿using System;
 using AI.DataStructs.Algebraic;
-using System.Collections.Generic;
-using System.Text;
 using AI.LLM.Services.LLM;
 using FAI.Router.Enums;
 using FAI.Router.Training;
@@ -16,30 +13,39 @@ namespace FAI.Router;
 /// несколько выборов одновременно и с разными предпочтениями: одному важна цена, другому
 /// качество. Пока значения жили только в статических свойствах <see cref="Settings"/>, соседний
 /// выбор менял условия уже начатому, и промах нечем было воспроизвести.
+/// <para>
+/// Множитель температуры может быть не задан: тогда его подставляет роутер (свой множитель
+/// <c>temperatureScale</c>), а без него общий <see cref="Settings.TemperatureScale"/>. Готовые профили
+/// и <see cref="Settings.Current"/> множителя не задают. Заданный множитель берется как есть, даже если
+/// он численно совпадает с общим: прежнее сравнение с общим значением молча заменяло явные 30 на 10.
+/// </para>
 /// </remarks>
 /// <param name="WQ">Доля важности качества</param>
 /// <param name="WC">Доля важности цены</param>
 /// <param name="Wt">Доля важности времени</param>
-/// <param name="TemperatureScale">Множитель температуры выбора; ноль делает выбор жадным</param>
-public readonly record struct RouteWeights(double WQ, double WC, double Wt, double TemperatureScale)
+/// <param name="TemperatureScale">Множитель температуры выбора; ноль делает выбор жадным; пусто, значит множитель роутера или общий</param>
+public readonly record struct RouteWeights(double WQ, double WC, double Wt, double? TemperatureScale = null)
 {
     /// <summary>
     /// Профиль «качество прежде всего»: 0,8 / 0,10 / 0,10. По замеру router-eval обходит по качеству
     /// все стратегии, включая всегда самую дорогую модель.
     /// </summary>
-    public static RouteWeights Quality => new(0.8, 0.10, 0.10, Settings.TemperatureScale);
+    public static RouteWeights Quality => new(0.8, 0.10, 0.10);
 
     /// <summary>
     /// Профиль «баланс»: 0,5 / 0,25 / 0,25, веса по умолчанию. Половина решения за качеством, по
     /// четверти за ценой и временем.
     /// </summary>
-    public static RouteWeights Balance => new(0.5, 0.25, 0.25, Settings.TemperatureScale);
+    public static RouteWeights Balance => new(0.5, 0.25, 0.25);
 
     /// <summary>
     /// Профиль «экономный»: 0,3 / 0,60 / 0,10. По замеру router-eval дает качество выше, чем всегда
     /// самая дешевая модель, почти по той же цене.
     /// </summary>
-    public static RouteWeights Price => new(0.3, 0.60, 0.10, Settings.TemperatureScale);
+    public static RouteWeights Price => new(0.3, 0.60, 0.10);
+
+    /// <summary>Множитель, которым считается выбор: заданный, иначе общий из Settings</summary>
+    public double ResolvedTemperatureScale => TemperatureScale ?? Settings.TemperatureScale;
 
     /// <summary>
     /// Профиль по имени: quality, balance или price. То же, что строковые профили в версии на Python.
@@ -66,27 +72,73 @@ public readonly record struct RouteWeights(double WQ, double WC, double Wt, doub
 /// <param name="Calibration">Перевод прогноза качества в вероятность лайка</param>
 /// <param name="PriorRate">Доля лайков по всем ходам: к ней стягивается малоизученный кандидат</param>
 /// <param name="PriorStrength">Сколько оценок весит эта доля против собственного прогноза кандидата</param>
-public readonly record struct SufficiencyBar(double Bar, Calibration Calibration, double PriorRate, double PriorStrength = 5)
+/// <param name="ForecastStrength">Сколько оценок весит откалиброванный прогноз кандидата, у которого опыта еще нет</param>
+public readonly record struct SufficiencyBar(double Bar, Calibration Calibration, double PriorRate, double PriorStrength = 5, double ForecastStrength = 1)
 {
     /// <summary>
     /// Вероятность, что кандидат с таким прогнозом устроит человека, с усадкой по его опыту.
     /// </summary>
     /// <remarks>
-    /// Новый кандидат получает долю лайков по всем ходам, а не свой прогноз: калибровка подобрана на
-    /// тех, кто уже побеждал, и на незнакомом ее наклону верить рано.
+    /// Откалиброванный прогноз весит опыт кандидата плюс <see cref="ForecastStrength"/>, доля лайков
+    /// весит <see cref="PriorStrength"/>. Новичок поэтому получает свой прогноз, сильно стянутый к доле
+    /// лайков, а не одну долю: при доле одной на всех новички были неразличимы, ниже планки не проходил
+    /// ни один, а при недоборе ход всегда доставался первому в списке.
     /// </remarks>
-    /// <param name="experience">Сколько оценок кандидат собрал победителем</param>
+    /// <param name="experience">Сколько оценок кандидат собрал победителем (автоотзывы с весом)</param>
     /// <param name="quality">Прогноз качества кандидата</param>
-    public double Sufficiency(int experience, double quality)
+    public double Sufficiency(double experience, double quality)
     {
-        int n = Math.Max(experience, 0);
+        double forecast = Math.Max(experience, 0) + Math.Max(ForecastStrength, 0);
 
-        return (n * Calibration.Predict(quality) + PriorStrength * PriorRate) / (n + PriorStrength);
+        return (forecast * Calibration.Predict(quality) + PriorStrength * PriorRate) / (forecast + PriorStrength);
     }
 }
 
 public class Settings
 {
+    /// <summary>Число признаков задачи вне спецификации, см. <see cref="FeaturesDim"/></summary>
+    private const int BaseFeaturesDim = 7;
+
+    /// <summary>
+    /// Число числовых метрик в Specifications (кроме one-hot стиля):
+    /// SymbolLength, WordLength, ParagraphCount, SectionCount, ListItemCount,
+    /// TableCount, CodeBlockCount, FormulaCount, HeadingDepth, AvgSentenceLength,
+    /// ReadabilityScore, TermDensity, FormalityScore
+    /// </summary>
+    private const int SpecNumericFeaturesCount = 13;
+
+    private static LLMBase? _llm;
+    private static int _featuresDim = BaseFeaturesDim;
+
+    /// <summary>
+    /// Во сколько раз автоотзыв слабее человеческого: и в обучении, и в опыте кандидата.
+    /// </summary>
+    /// <remarks>
+    /// Автоотзыв это разбор расхождений по пунктам, и половина его пунктов расходится почти всегда.
+    /// Давать ему голос человека значило бы давать шуму тот же вес, что и оценке; не давать никакого
+    /// тоже нельзя: без человеческих отзывов разведка тогда не остывала вовсе. Величина не измерялась.
+    /// </remarks>
+    public const double AutoFeedbackWeight = 0.25;
+
+    /// <summary>
+    /// Условный опыт кандидата, стартующего с начальных весов по рейтингам: столько оцененных ходов
+    /// стоят его рейтинги в формуле температуры. Величина не измерялась.
+    /// </summary>
+    public const double PriorExperience = 2;
+
+    /// <summary>
+    /// Сколько ходов весит неизвестная дисперсия против замеренной: два одинаковых отзыва иначе давали
+    /// нулевую дисперсию и уверенность на пустом месте.
+    /// </summary>
+    public const double VariancePriorStrength = 1;
+
+    /// <summary>
+    /// Дисперсия, приписываемая кандидату, о котором еще нечего знать. Взято наибольшее
+    /// возможное значение для оценки из отрезка от нуля до единицы, поэтому новичок получает
+    /// самую высокую температуру и участвует в выборе чаще, чем позволил бы его прогноз.
+    /// </summary>
+    public const double UnknownVariance = 0.25;
+
     /// <summary>
     /// Доли важности качества, времени и цены в метрике R: R = WQ·q − WC·c − Wt·t.
     /// Каждое слагаемое приводится к одному масштабу внутри группы кандидатов, поэтому веса
@@ -149,20 +201,14 @@ public class Settings
     public static double ContentWeight { get; set; } = 0.7;
 
     /// <summary>
-    /// Нынешние веса одним значением: их получает выбор, который своих не назвал.
+    /// Нынешние веса одним значением: их получает выбор, который своих не назвал. Множитель
+    /// температуры не задан: его подставляет роутер или общий <see cref="TemperatureScale"/>.
     /// </summary>
-    public static RouteWeights Current => new(WQ, WC, Wt, TemperatureScale);
+    public static RouteWeights Current => new(WQ, WC, Wt);
 
     /// <summary>
-    /// Дисперсия, приписываемая кандидату, о котором еще нечего знать. Взято наибольшее
-    /// возможное значение для оценки из отрезка от нуля до единицы, поэтому новичок получает
-    /// самую высокую температуру и участвует в выборе чаще, чем позволил бы его прогноз.
-    /// </summary>
-    public const double UnknownVariance = 0.25;
-
-    /// <summary>
-    /// Среднее по векторам задач. Вычитается из признаков перед подсчетом прогноза качества и
-    /// перед обучением.
+    /// Среднее по векторам задач по умолчанию, для кандидатов без своего среднего
+    /// (<see cref="RoutedElements.BaseRoutedElement.TaskMean"/>). Оставлено ради совместимости.
     /// </summary>
     /// <remarks>
     /// Векторы разных задач сонаправлены примерно на 0,95, поэтому у них велика общая
@@ -170,40 +216,18 @@ public class Settings
     /// смещения весов по ней в десятки раз сильнее смещений по различающей части, из-за чего
     /// кандидаты не расходятся по типам задач. Вычитание среднего убирает эту общую часть.
     /// <para>
-    /// Значение задается один раз по накопленным ходам и дальше не меняется: веса обучены в
-    /// пространстве с этим средним, и подмена среднего обесценивает их так же, как смена
-    /// размерности признаков. Пустое значение отключает вычитание.
+    /// Среднее принадлежит вектору кандидата, а не процессу: вектор построен в пространстве с этим
+    /// средним, и прогноз по другому среднему бессмыслен. Прежде FaiRouter задавал это общее значение
+    /// после построения начальных весов (при Load или первом Train), и прогнозы необученных кандидатов
+    /// пересчитывались в чужом пространстве; два роутера в одном процессе затирали среднее друг другу.
+    /// Теперь FaiRouter его не трогает, а кандидат хранит свое среднее сам. Пустое значение
+    /// отключает вычитание.
     /// </para>
     /// </remarks>
     public static Vector? TaskMean { get; set; }
 
     /// <summary>
-    /// Приводит признаки задачи к тому виду, в котором работают прогноз качества и обучение:
-    /// вычитает среднее и возвращает длину вектора к единице.
-    /// </summary>
-    /// <remarks>
-    /// Возврат длины обязателен. Шаг обучения меняет оценку на величину, пропорциональную
-    /// квадрату длины вектора задачи, а после вычитания среднего вектор укорачивается в разы.
-    /// Обучение от этого замедляется во столько же раз, и разница между устройствами прогноза
-    /// подменяется разницей скоростей. На измерении с тремя типами задач один только возврат
-    /// длины поднял долю удачных запусков с 4 из 20 до 18 из 20.
-    /// </remarks>
-    /// <param name="features">Признаки задачи</param>
-    public static Vector Center(Vector features)
-    {
-        if (TaskMean is null)
-            return features;
-
-        Vector centered = features - TaskMean;
-
-        // Задача ровно в середине набора: направления у нее нет, и нормировать нечего
-        return centered.NormL2() < 1e-12 ? centered : centered.GetUnitVector();
-    }
-
-    private static LLMBase? _llm;
-
-    /// <summary>
-    /// Модель для работы системы. Назначается один раз при старте приложения.
+    /// Модель для работы системы: значение по умолчанию для компонентов, которым клиент не передали.
     /// </summary>
     public static LLMBase LLM
     {
@@ -215,18 +239,16 @@ public class Settings
     /// <summary>
     /// Число признаков задачи вне спецификации: длина входа, ожидаемая длина ответа, длина
     /// диалога, число ограничений, экспертность, трудность и опора на факты
-    /// (<see cref="RotationTracking.InputFeatures"/>).
+    /// (<see cref="RotationTracking.InputFeatures"/>). Меньше семи не бывает: эти семь заполняются
+    /// всегда, лишние разряды остаются нулями.
     /// </summary>
-    public static int FeaturesDim { get; set; } = 7;
-
-
-    /// <summary>
-    /// Число числовых метрик в Specifications (кроме one-hot стиля):
-    /// SymbolLength, WordLength, ParagraphCount, SectionCount, ListItemCount,
-    /// TableCount, CodeBlockCount, FormulaCount, HeadingDepth, AvgSentenceLength,
-    /// ReadabilityScore, TermDensity, FormalityScore
-    /// </summary>
-    private const int SpecNumericFeaturesCount = 13;
+    public static int FeaturesDim
+    {
+        get => _featuresDim;
+        set => _featuresDim = value >= BaseFeaturesDim
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, $"Признаков задачи не меньше {BaseFeaturesDim}.");
+    }
 
     /// <summary>
     /// Размерность пространства признаков спецификации: коды «один из многих» стиля и предмета
@@ -240,4 +262,41 @@ public class Settings
         + Enum.GetValues<Domain>().Length - 1 + Enum.GetValues<ProgrammingLanguage>().Length - 1
         + Enum.GetValues<ScienceField>().Length - 1 + Enum.GetValues<TaskKind>().Length - 1
         + JudgeLogic.Specifications.LanguageDim + 1;
+
+    /// <summary>Полная длина вектора кандидата и вектора задачи</summary>
+    public static int VectorDim => FeaturesDim + FeaturesSpecDim;
+
+    /// <summary>Задан ли общий клиент модели: фабрики ставят его, только если его еще нет</summary>
+    internal static bool HasLLM => _llm is not null;
+
+    /// <summary>
+    /// Приводит признаки задачи к тому виду, в котором работают прогноз качества и обучение:
+    /// вычитает общее среднее <see cref="TaskMean"/> и возвращает длину вектора к единице.
+    /// </summary>
+    /// <param name="features">Признаки задачи</param>
+    public static Vector Center(Vector features) => Center(features, TaskMean);
+
+    /// <summary>
+    /// Приводит признаки задачи к тому виду, в котором работают прогноз качества и обучение:
+    /// вычитает среднее и возвращает длину вектора к единице.
+    /// </summary>
+    /// <remarks>
+    /// Возврат длины обязателен. Шаг обучения меняет оценку на величину, пропорциональную
+    /// квадрату длины вектора задачи, а после вычитания среднего вектор укорачивается в разы.
+    /// Обучение от этого замедляется во столько же раз, и разница между устройствами прогноза
+    /// подменяется разницей скоростей. На измерении с тремя типами задач один только возврат
+    /// длины поднял долю удачных запусков с 4 из 20 до 18 из 20.
+    /// </remarks>
+    /// <param name="features">Признаки задачи</param>
+    /// <param name="mean">Среднее; пусто, значит вычитать нечего</param>
+    public static Vector Center(Vector features, Vector? mean)
+    {
+        if (mean is null || mean.Count != features.Count)
+            return features;
+
+        Vector centered = features - mean;
+
+        // Задача ровно в середине набора: направления у нее нет, и нормировать нечего
+        return centered.NormL2() < 1e-12 ? centered : centered.GetUnitVector();
+    }
 }

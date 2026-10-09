@@ -40,14 +40,33 @@ public static class QualityPrior
     /// </remarks>
     /// <param name="measurements">Пары «признаки задачи и замеренное качество кандидата на ней»</param>
     /// <param name="ridge">Добавка к диагонали системы, доля среднего квадрата длины задачи</param>
-    public static Vector FromMeasurements(IReadOnlyList<(Vector Task, double Quality)> measurements, double ridge = DefaultRidge)
+    public static Vector FromMeasurements(IReadOnlyList<(Vector Task, double Quality)> measurements, double ridge = DefaultRidge) =>
+        Fit(measurements, null, Settings.TaskMean, ridge);
+
+    /// <summary>
+    /// Как <see cref="FromMeasurements"/>, но с весами точек и явным средним задач
+    /// </summary>
+    /// <remarks>
+    /// Вес точки задает ее долю в ошибке подгонки: решается взвешенная гребневая задача, в двойственной
+    /// форме (G + λ·diag(1/w))·α = q. Веса приводятся к среднему 1, поэтому сила стягивания та же, что
+    /// без весов, а при равных весах решение совпадает с невзвешенным.
+    /// </remarks>
+    /// <param name="measurements">Пары «признаки задачи и замеренное качество кандидата на ней»</param>
+    /// <param name="weights">Вес каждой точки; пусто, значит равные</param>
+    /// <param name="mean">Среднее задач, в пространстве которого строится вектор; пусто, значит без вычитания</param>
+    /// <param name="ridge">Добавка к диагонали системы, доля среднего квадрата длины задачи</param>
+    public static Vector Fit(IReadOnlyList<(Vector Task, double Quality)> measurements, IReadOnlyList<double>? weights, Vector? mean, double ridge = DefaultRidge)
     {
         if (measurements.Count == 0)
             throw new ArgumentException("Нужен хотя бы один замер.", nameof(measurements));
 
+        if (weights is not null && (weights.Count != measurements.Count || weights.Any(weight => !(weight > 0))))
+            throw new ArgumentException("Весов должно быть столько же, сколько замеров, и все больше нуля.", nameof(weights));
+
         // Тот же вид признаков, в котором работают прогноз и обучение
-        Vector[] tasks = [.. measurements.Select(item => Settings.Center(item.Task))];
+        Vector[] tasks = [.. measurements.Select(item => Settings.Center(item.Task, mean))];
         int count = tasks.Length;
+        double meanWeight = weights?.Average() ?? 1;
 
         double[][] gram = new double[count][];
 
@@ -62,7 +81,7 @@ public static class QualityPrior
         double scale = ridge * Enumerable.Range(0, count).Average(i => gram[i][i]);
 
         for (int row = 0; row < count; row++)
-            gram[row][row] += scale;
+            gram[row][row] += scale * (weights is null ? 1 : meanWeight / weights[row]);
 
         double[] coefficients = Solve(gram, [.. measurements.Select(item => item.Quality)]);
         Vector prior = new(tasks[0].Count);
@@ -73,9 +92,11 @@ public static class QualityPrior
         return prior;
     }
 
-    // Решение малой системы исключением Гаусса с выбором главного элемента.
-    // Искал Inverse, Solve и Gauss в AI и AI.ClassicMath, готового решателя не нашлось,
-    // а система здесь размером с число замеренных типов задач, то есть единицы.
+    // Решение системы исключением Гаусса с выбором главного элемента.
+    // Искал Inverse, Solve и Gauss в AI и AI.ClassicMath, готового решателя не нашлось.
+    // Система размером с число замеров: у модели из рейтингов это десятки точек (по точке на
+    // профиль серии), у безрейтинговой все профили сразу, около сотни, то есть кубическое
+    // исключение здесь дешево.
     private static double[] Solve(double[][] matrix, double[] right)
     {
         int size = right.Length;

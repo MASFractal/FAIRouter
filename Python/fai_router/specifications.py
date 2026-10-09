@@ -26,6 +26,17 @@ class Specifications:
     # разрядом, любой другой известный язык светит последним, неизвестный не светит ничем
     LANGUAGE_CODES = ("en", "ru", "zh", "fr", "de", "es", "ja", "ko", "pl")
 
+    # Сколько смысловых пунктов и ограничений берется из заказа: больше удорожает суд и размывает разбор
+    MAX_ITEMS = 12
+
+    # Поля формы, которые запрос может задать явно, именами в схеме ответа модели. Остальные поля
+    # (область, область науки, тип задачи) описывают предмет задачи и сверяются всегда
+    STATABLE_FIELDS = (
+        "styleType", "symbolLength", "wordLength", "paragraphCount", "sectionCount", "listItemCount",
+        "tableCount", "codeBlockCount", "formulaCount", "headingDepth", "avgSentenceLength",
+        "readabilityScore", "termDensity", "formalityScore", "language", "hasReferences", "programmingLanguage",
+    )
+
     def __init__(
         self,
         style_type: Style = Style.OTHER,
@@ -53,6 +64,7 @@ class Specifications:
         factuality_demand: float = 0.0,
         required_points: list[str] | None = None,
         constraints: list[str] | None = None,
+        explicit_fields: list[str] | None = None,
     ):
         self.style_type = style_type
         self.symbol_length = symbol_length
@@ -84,6 +96,11 @@ class Specifications:
         # выполнение указаний, а не число разделов
         self.required_points = list(required_points or [])
         self.constraints = list(constraints or [])
+        # Поля формы, которые запрос задал явно, именами из STATABLE_FIELDS. Остальные модель угадала
+        # разумным ожиданием, и критик их не сверяет: угаданное требование не требование. None значит
+        # неизвестно: заказ собран кодом или распознан прежней версией, тогда все поля считаются
+        # заданными явно
+        self.explicit_fields = None if explicit_fields is None else list(explicit_fields)
 
     # Доли приходят от модели, а она границы схемы соблюдает не всегда: DeepSeek возвращал
     # term_density 4 и 80 при объявленных 0..1. Такое значение забивает длину вектора целиком,
@@ -148,11 +165,24 @@ class Specifications:
     @classmethod
     def language_slot(cls, code: str | None) -> int:
         """Разряд языка в векторе: по списку LANGUAGE_CODES, последний для прочих, минус единица
-        для неизвестного."""
-        if not code or not code.strip():
+        для неизвестного. Код можно с регионом (ru-RU) и в любом регистре."""
+        normalized = cls.normalize_language(code)
+        if normalized is None:
             return -1
-        code = code.strip().lower()
-        return cls.LANGUAGE_CODES.index(code) if code in cls.LANGUAGE_CODES else len(cls.LANGUAGE_CODES)
+        return cls.LANGUAGE_CODES.index(normalized) if normalized in cls.LANGUAGE_CODES else len(cls.LANGUAGE_CODES)
+
+    @staticmethod
+    def normalize_language(code: str | None) -> str | None:
+        """Код языка без региона и в нижнем регистре: RU, ru-RU и ru_RU дают ru. None, если языка нет."""
+        if not isinstance(code, str) or not code.strip():
+            return None
+        trimmed = code.strip()
+        cut = min((i for i in (trimmed.find("-"), trimmed.find("_")) if i > 0), default=len(trimmed))
+        return trimmed[:cut].lower()
+
+    def is_explicit(self, field: str) -> bool:
+        """Задано ли поле явно: да, если оно в explicit_fields или список неизвестен."""
+        return self.explicit_fields is None or field.lower() in (name.lower() for name in self.explicit_fields)
 
     def feature_vector(self) -> np.ndarray:
         """Вектор признаков: коды «один из многих» стиля и предмета задачи, приведенные к масштабу
@@ -178,9 +208,9 @@ class Specifications:
         if slot >= 0:
             language[slot] = 1.0
         return np.concatenate([
-            _one_hot(self.style_type), numeric,
-            _subject(self.domain), _subject(self.programming_language),
-            _subject(self.science_field), _subject(self.task_kind),
+            _one_hot(self.style_type, Style), numeric,
+            _subject(self.domain, Domain), _subject(self.programming_language, ProgrammingLanguage),
+            _subject(self.science_field, ScienceField), _subject(self.task_kind, TaskKind),
             language, [1.0 if self.has_references else 0.0],
         ])
 
@@ -211,38 +241,55 @@ class Specifications:
     def to_dict(self) -> dict[str, Any]:
         data = {name: getattr(self, name) for name in self._FIELDS}
         for name in self._ENUM_FIELDS:
-            data[name] = getattr(self, name).value
+            value = getattr(self, name)
+            data[name] = value.value if isinstance(value, Indexed) else None
         for name in self._LIST_FIELDS:
             data[name] = list(getattr(self, name))
+        data["explicit_fields"] = None if self.explicit_fields is None else list(self.explicit_fields)
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Specifications":
+        """Спецификация из словаря. Значение перечисления принимается только именем из перечисления:
+        число или незнакомое имя оставляют поле «не задано», а не роняют чтение журнала."""
         spec = cls()
         for name in cls._FIELDS:
             if name in data and data[name] is not None:
                 setattr(spec, name, data[name])
         for name, enum_cls in cls._ENUM_FIELDS.items():
-            value = data.get(name)
+            value = enum_value(enum_cls, data.get(name))
             if value is not None:
-                setattr(spec, name, enum_cls(value))
+                setattr(spec, name, value)
         for name in cls._LIST_FIELDS:
             setattr(spec, name, [str(item) for item in data.get(name) or []])
+        explicit = data.get("explicit_fields")
+        spec.explicit_fields = None if explicit is None else [str(item) for item in explicit]
         return spec
 
 
-def _one_hot(value: Indexed) -> np.ndarray:
-    """Код «один из многих» по перечислению: разряд по порядку значения."""
-    vector = np.zeros(len(type(value)))
-    vector[value.index] = 1.0
+def enum_value(enum_cls: type[Indexed], value: Any) -> Indexed | None:
+    """Значение перечисления по имени (как в версии на C#); число, незнакомое имя и пусто дают None."""
+    if isinstance(value, enum_cls):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return enum_cls(value)
+    except ValueError:
+        return None
+
+
+def _one_hot(value: Any, enum_cls: type[Indexed]) -> np.ndarray:
+    """Код «один из многих» по перечислению: разряд по порядку значения. Значение вне перечисления
+    не роняет вектор и не светит ничем."""
+    vector = np.zeros(len(enum_cls))
+    if isinstance(value, enum_cls):
+        vector[value.index] = 1.0
     return vector
 
 
-def _subject(value: Indexed) -> np.ndarray:
+def _subject(value: Any, enum_cls: type[Indexed]) -> np.ndarray:
     """Код предмета задачи: как «один из многих», но первое значение означает «не задано» и
     разряда не имеет. Задача без предмета получает те же координаты, что и раньше, и оценки
     судьи на ней не меняются."""
-    vector = np.zeros(len(type(value)) - 1)
-    if value.index > 0:
-        vector[value.index - 1] = 1.0
-    return vector
+    return _one_hot(value, enum_cls)[1:]

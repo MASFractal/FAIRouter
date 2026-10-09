@@ -25,17 +25,30 @@ public static class Providers
     public const string OpenRouter = "https://openrouter.ai/api/v1";
 
     /// <summary>
-    /// Поставщик по виду ключа: ключи OpenRouter начинаются с sk-or-, ключи FractalRouter с rtr_live_
-    /// или frr_test_. Незнакомый ключ считается ключом FractalRouter.
+    /// Поставщик по виду ключа: ключи OpenRouter начинаются с sk-or-, ключи FractalRouter с rtr_
+    /// (rtr_live_) или frr_ (frr_test_). Незнакомый ключ это ошибка: прежде он считался ключом
+    /// FractalRouter, и ключ OpenAI (sk-proj-) или Anthropic (sk-ant-) уходил заголовком Bearer
+    /// чужому поставщику. Для другого поставщика адрес задается явно.
     /// </summary>
     /// <param name="apiKey">Ключ поставщика</param>
-    public static string ForKey(string apiKey) =>
-        apiKey.StartsWith("sk-or-", StringComparison.Ordinal) ? OpenRouter : FractalRouter;
+    /// <exception cref="ArgumentException">Вид ключа не опознан</exception>
+    public static string ForKey(string apiKey)
+    {
+        if (apiKey.StartsWith("sk-or-", StringComparison.Ordinal))
+            return OpenRouter;
+
+        if (apiKey.StartsWith("rtr_", StringComparison.Ordinal) || apiKey.StartsWith("frr_", StringComparison.Ordinal))
+            return FractalRouter;
+
+        throw new ArgumentException(
+            "Поставщик по ключу не опознан (знакомы sk-or-, rtr_ и frr_): задайте адрес поставщика явно, "
+            + "например new OpenAiCompatibleLlm(адрес, ключ, модель).", nameof(apiKey));
+    }
 
     /// <summary>
     /// Поставщик и ключ из окружения: переменная FRACTALROUTER_API_KEY дает FractalRouter,
     /// OPENROUTER_API_KEY дает OpenRouter, иначе ключ читается из файла key.txt в указанных каталогах
-    /// и поставщик опознается по виду ключа. Пустой ключ означает, что ничего не найдено.
+    /// и поставщик опознается по виду ключа (<see cref="ForKey"/>; незнакомый вид это ошибка). Пустой ключ означает, что ничего не найдено.
     /// </summary>
     /// <param name="keyDirectories">Где искать key.txt, по порядку</param>
     public static (string BaseUrl, string ApiKey) FromEnvironment(params string[] keyDirectories)
@@ -70,10 +83,23 @@ public static class Providers
 /// <remarks>
 /// Построен на клиенте OpenRouter из AI.LLM: тот не проверяет размер контекста перед отправкой, и
 /// это нужно для всех шлюзов, у которых окно модели заранее неизвестно. То же, что OpenRouterClient
-/// с base_url в версии на Python.
+/// с base_url в версии на Python. Запросы идут через одно соединение на процесс (<see cref="ProviderHttp"/>):
+/// прежде каждый клиент держал свой HttpClient, и вытесненные никто не освобождал. Окончательный
+/// отказ поставщика (4xx) не повторяется и приходит <see cref="ProviderRejectedException"/> внутри
+/// исключения движка.
 /// </remarks>
 public class OpenAiCompatibleLlm : LLMBase
 {
+    /// <summary>
+    /// Адрес поставщика без завершающей косой черты
+    /// </summary>
+    public string BaseUrl { get; }
+
+    /// <summary>
+    /// Идентификатор модели
+    /// </summary>
+    public string Model { get; }
+
     /// <summary>
     /// Клиент модели у поставщика по адресу
     /// </summary>
@@ -88,22 +114,12 @@ public class OpenAiCompatibleLlm : LLMBase
         Model = model;
     }
 
-    /// <summary>
-    /// Адрес поставщика без завершающей косой черты
-    /// </summary>
-    public string BaseUrl { get; }
-
-    /// <summary>
-    /// Идентификатор модели
-    /// </summary>
-    public string Model { get; }
-
     private static ChatLLMApi Init(string baseUrl, string apiKey, string model, string systemPrompt)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
             throw new ArgumentException("Адрес поставщика не задан.", nameof(baseUrl));
 
-        return new OpenRouterModelApi(apiKey, model, systemPrompt)
+        return new OpenRouterModelApi(new ProviderHttp(apiKey), model, systemPrompt)
         {
             ApiUrl = $"{baseUrl.TrimEnd('/')}/chat/completions"
         };

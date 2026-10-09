@@ -84,7 +84,7 @@ public class Judge
         IEnumerable<string> lines =
         [
             head,
-            .. critic.Mismatches.Select(item => $"{item.Field}: заказано {item.Requested}, получено {item.Actual}"),
+            .. critic.Mismatches.Select(item => item.ToString()),
             .. (content?.Issues ?? []).Select(issue => "- " + issue),
         ];
 

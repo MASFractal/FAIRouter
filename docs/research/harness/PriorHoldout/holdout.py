@@ -248,9 +248,11 @@ def accuracy(predictor: str = "приор") -> tuple[float, float, float]:
 
 def with_ridge(value: float) -> None:
     """Сила регуляризации приора: доля среднего квадрата длины задачи (QualityPrior)."""
+    # Приор и uniform подгоняются через quality_prior.fit (взвешенная подгонка), поэтому подменяется он
     from fai_router.training import quality_prior
-    fit = quality_prior.from_measurements
-    benchmark_prior.from_measurements = lambda pairs, ridge=value: fit(pairs, ridge)
+    fit = quality_prior.fit
+    benchmark_prior.fit = lambda pairs, weights, mean, ridge=value: fit(pairs, weights, mean, ridge)
+    benchmark_prior._uniform_unit = None
 
 
 def with_bias(value: float) -> None:
@@ -260,6 +262,8 @@ def with_bias(value: float) -> None:
 
     original = InputFeatures.feature_vector
     InputFeatures.feature_vector = lambda self: np.concatenate([original(self), [value]])
+    # Запомненный вектор uniform построен на прежней длине признаков
+    benchmark_prior._uniform_unit = None
 
 
 if __name__ == "__main__":

@@ -30,6 +30,11 @@ class FakeLlm:
                                "codeBlockCount": 0, "formulaCount": 0, "headingDepth": 2,
                                "avgSentenceLength": 18, "readabilityScore": 35, "termDensity": 0.7,
                                "formalityScore": 0.9, "language": "ru", "hasReferences": True})
+        if schema_name == "content_review":
+            return json.dumps({"claims": [], "points": [], "constraints": [], "expertLevel": 0.7,
+                               "completeness": 0.9, "instructionFollowing": 1.0, "reasoning": 0.9,
+                               "expertise": 0.8, "structureContent": 0.8, "sourceQuality": 0.7,
+                               "fitForPurpose": 0.8, "issues": []})
         return json.dumps({"styleType": "Scientific", "termDensity": 0.65, "formalityScore": 0.85})
 
 
@@ -49,39 +54,61 @@ def make_router(tmp_path, measure=True):
 
 
 def test_ask_runs_whole_loop_and_journals(tmp_path):
+    """Жадный выбор (множитель температуры ноль): при равных прогнозах ход у дешевого и быстрого.
+    Итоговая оценка складывается из оценки содержания и формы по Settings.content_weight и
+    записывается автоотзывом к ходу."""
+    from fai_router.judge import Judge
+    from fai_router.settings import RouteWeights
+
     router, calls = make_router(tmp_path)
+    router.route_weights = RouteWeights(0.5, 0.25, 0.25, 0.0)
     answer = router.ask("Напиши научный обзор методов кластеризации на 1500 знаков.")
 
-    assert answer.winner in ("cheap", "strong")
-    assert calls[0][0] == answer.winner
-    assert answer.text.startswith("# Ответ от")
+    assert answer.winner == "cheap" and calls == [("cheap", "Напиши научный обзор методов кластеризации на 1500 знаков.")]
+    assert not answer.trace.is_exploration and answer.trace.top_k_elements[0].name == "cheap"
+    assert answer.trace.forecast == pytest.approx(router.candidates[0].get_quality_score(answer.trace.input_feature_vector))
     assert answer.requested.style_type == Style.SCIENTIFIC
-    assert answer.actual is not None and answer.critic is not None
-    assert 0 <= answer.score <= 1
-    assert answer.round_id == 1
-    assert router.traces.count() == (1, 1)
+    # Содержание: полнота 0,9 (пунктов нет), расчеты 0,9, глубина 0,8, наполнение 0,8, источники 0,7
+    # (заказаны), пригодность 0,8; фактологии и указаний нет
+    assert answer.content.score == pytest.approx(4.9 / 6)
+    assert answer.assessment == pytest.approx(
+        Settings.content_weight * 4.9 / 6 + (1 - Settings.content_weight) * (1 - answer.critic.form_deviation))
+    assert answer.score == pytest.approx(router.judge.get_score(answer.requested, answer.actual))
+    assert answer.round_id == 1 and router.traces.count() == (1, 1)
+    stored = router.traces.read_rated(router.candidates)[0]
+    assert stored.feedback.score == pytest.approx(answer.assessment)
+    assert stored.trace.forecast == pytest.approx(answer.trace.forecast)
+    assert Judge.report(answer.critic, answer.content).startswith("Содержание 0.82")
 
 
 def test_feedback_train_save_load(tmp_path):
+    """Лайк человека поднимает прогноз победителя на той задаче; сохраняются только векторы,
+    которых касалось обучение; опыт после загрузки: человеческий отзыв целиком, автоотзывы с весом."""
     router, _ = make_router(tmp_path)
     router.ask("Напиши научный обзор методов кластеризации на 1500 знаков.")
     router.ask("Объясни ребенку, что такое кластеризация, в 600 знаков.")
     router.ask("Напиши научный обзор методов регуляризации на 1500 знаков.")
     router.feedback(1, 1.0)
-    before = [c.ideal_match_vector.copy() for c in router.candidates]
+    liked = router.traces.read_rated(router.candidates)[0].trace
+    forecast_before = liked.winner.get_quality_score(liked.input_feature_vector)
 
     loss = router.train(epochs=5)
-    assert loss >= 0
-    assert Settings.task_mean is not None
-    assert any(not np.array_equal(b, c.ideal_match_vector) for b, c in zip(before, router.candidates))
+    # Три хода с отзывами: человеческий и два автоотзыва; судья учится только на человеческом
+    assert loss.rounds == 3 and loss.router > 0 and loss.judge > 0 and float(loss) == loss.router + loss.judge
+    assert liked.winner.get_quality_score(liked.input_feature_vector) > forecast_before
+    # Среднее задач обучение не трогает: оно принадлежит вектору кандидата
+    assert Settings.task_mean is None
+    assert router.train().rounds == 0
 
     router.save()
-    Settings.task_mean = None
-    again = FaiRouter(router.candidates, lambda c, m: "", database_path=str(tmp_path / "r.db"), measure=False)
-    assert Settings.task_mean is not None
-    # Три хода оценены, но в опыт идет только человеческий отзыв, а он один: автоотзыв
-    # температуру не сбивает, разведка не гаснет по мнению собственного судьи
-    assert again.candidates[0].experience + again.candidates[1].experience == 1
+    winners = {item.trace.winner.name for item in router.traces.read_rated(router.candidates)}
+    fresh = [RoutedElement(c.name, ideal_match_vector=np.full(Settings.full_dim(), 7.0)) for c in router.candidates]
+    again = FaiRouter(fresh, lambda c, m: "", database_path=str(tmp_path / "r.db"), measure=False)
+    for restored, original in zip(again.candidates, router.candidates):
+        loaded = np.array_equal(restored.ideal_match_vector, original.ideal_match_vector)
+        assert loaded == (restored.name in winners)
+    # В опыт человеческий отзыв идет целиком, автоотзыв с весом AUTO_FEEDBACK_WEIGHT
+    assert sum(c.experience for c in again.candidates) == pytest.approx(1 + 2 * Settings.AUTO_FEEDBACK_WEIGHT)
 
 
 def test_capability_requirement_reaches_router(tmp_path):
@@ -170,8 +197,10 @@ def test_from_openai_compatible_builds_candidates_without_catalog(monkeypatch):
     assert names == ["anthropic/claude-opus-4.7", "my/own-model"]
     assert router.candidates[1].dpmt_inp == 1.0 and router.candidates[1].dpmt_outp == 2.0
     assert router.candidates[1].tps == 120
-    assert Settings.llm.base_url == "https://example.test/v1"
-    assert Settings.llm.model == "openai/gpt-4o-mini"
+    assert router.llm.base_url == "https://example.test/v1"
+    assert router.llm.model == "openai/gpt-4o-mini"
+    # Общий клиент фабрика ставит, только если его не было
+    assert Settings.llm is router.llm
     # Начальный вектор известной модели пришел из снимка замеров, а не из случайного Ксавье
     from fai_router.benchmarks import default_snapshot
     from fai_router.training import benchmark_prior
@@ -202,11 +231,11 @@ def test_from_fractalrouter_uses_its_own_catalog_and_address(monkeypatch):
     router = FaiRouter.from_fractalrouter("rtr_live_x", ["anthropic/claude-sonnet-5", "openai/gpt-4o-mini"],
                                           measure=False)
     assert seen == ["rtr_live_x"]
-    assert Settings.llm.base_url == FRACTALROUTER_URL and Settings.llm.api_key == "rtr_live_x"
+    assert router.llm.base_url == FRACTALROUTER_URL and router.llm.api_key == "rtr_live_x"
     sonnet, mini = router.candidates
     assert (sonnet.dpmt_inp, sonnet.dpmt_outp) == (213.55, 1067.74)
     assert sonnet.capabilities & Capability.VISION and not (mini.capabilities & Capability.VISION)
-    assert sonnet.context_limit == 0
+    assert sonnet.context_limit == 0 and sonnet.context_window == 1000000
 
 
 def test_unknown_model_without_price_is_an_error(monkeypatch):
@@ -215,6 +244,31 @@ def test_unknown_model_without_price_is_an_error(monkeypatch):
     monkeypatch.setattr(catalog, "fetch", lambda *a, **k: [])
     with pytest.raises(ValueError, match="нет цены"):
         FaiRouter.from_openai_compatible("https://example.test/v1", "ключ", ["nobody/knows"], measure=False)
+
+
+def test_model_ids_generator_is_read_once(monkeypatch):
+    """Генератор идентификаторов читается один раз: прежде проверка цен съедала его, и выбору
+    доставался остаток списка."""
+    from fai_router import catalog
+
+    monkeypatch.setattr(catalog, "fetch", lambda *a, **k: [])
+    prices = {"a/model": (1.0, 2.0), "b/model": (3.0, 4.0)}
+    router = FaiRouter.from_openai_compatible("https://example.test/v1", "k", (name for name in prices),
+                                              prices=prices, measure=False)
+    assert [c.name for c in router.candidates] == ["a/model", "b/model"]
+
+
+def test_network_failure_falls_back_to_bundled_prices(monkeypatch):
+    """Каталог недоступен по сети: цены берутся из комплекта, роутер создается."""
+    from fai_router import catalog
+
+    def offline(*args, **kwargs):
+        raise OSError("нет сети")
+
+    monkeypatch.setattr(catalog, "fetch", offline)
+    router = FaiRouter.from_openai_compatible("https://example.test/v1", "k", "popular", measure=False)
+    assert [c.name for c in router.candidates] == catalog.popular_models()
+    assert any(c.dpmt_inp > 0 and c.dpmt_outp > 0 for c in router.candidates)
 
 
 def test_measurement_failure_keeps_the_answer(tmp_path):
@@ -262,6 +316,7 @@ def test_named_model_sets_and_profiles(monkeypatch):
     assert [c.name for c in by_popular.candidates] == [popular[0]]
 
     by_all = FaiRouter.from_openai_compatible("https://example.test/v1", "k", "all", measure=False, weights="price")
+    # Запись с неизвестной ценой (минус единица) в набор «все» не входит
     assert sorted(c.name for c in by_all.candidates) == sorted([popular[0], "vendor/unknown"])
     assert by_all.route_weights == RouteWeights.price()
 
@@ -290,6 +345,7 @@ def test_profile_reaches_the_route(tmp_path, monkeypatch):
     router.ask("Напиши научный обзор на 1500 знаков.")
     router.ask("Напиши научный обзор на 1500 знаков.", weights="quality")
     assert seen == [None, RouteWeights.quality()]
+    assert seen[1].temperature_scale is None
 
 
 def test_bar_waits_for_human_ratings_then_calibrates(tmp_path, monkeypatch):
@@ -332,7 +388,8 @@ def test_custom_bar_marks_shortfall_and_takes_the_strongest(tmp_path):
     unreachable = SufficiencyBar(0.999, Calibration(10.0, -5.0), prior_rate=0.5)
     answer = router.ask("Напиши научный обзор на 1500 знаков.", bar=unreachable)
     assert answer.reached is False
-    assert answer.winner == "strong" and not answer.trace.is_exploration
+    # Опыт у обоих большой, разброс отзывов мал: жребий почти жадный, и ход достается сильнейшему
+    assert answer.winner == "strong"
 
     generous = SufficiencyBar(0.0, Calibration(10.0, -5.0), prior_rate=0.5)
     answer = router.ask("Напиши научный обзор на 1500 знаков.", bar=generous)
@@ -354,17 +411,20 @@ def test_factory_lowers_temperature_only_for_rated_candidates(monkeypatch):
     rated = FaiRouter.from_openai_compatible("https://example.test/v1", "k", ["anthropic/claude-opus-4.7"],
                                              prices={"anthropic/claude-opus-4.7": (15, 75)}, measure=False)
     assert rated.temperature_scale == Settings.PRIOR_TEMPERATURE_SCALE == 10.0
-    assert rated._weights_for(None).temperature_scale == 10.0
-    assert rated._weights_for("price") == RouteWeights(0.3, 0.60, 0.10, 10.0)
+    assert rated.candidates[0].prior_experience == Settings.PRIOR_EXPERIENCE
+    assert rated.weights_for(None).temperature_scale == 10.0
+    assert rated.weights_for("price") == RouteWeights(0.3, 0.60, 0.10, 10.0)
     # Готовые веса с собственным множителем берутся как есть
     own = RouteWeights(0.5, 0.25, 0.25, 42.0)
-    assert rated._weights_for(own) is own
+    assert rated.weights_for(own) is own
 
     mixed = FaiRouter.from_openai_compatible(
         "https://example.test/v1", "k", ["anthropic/claude-opus-4.7", "my/own-model"],
         prices={"anthropic/claude-opus-4.7": (15, 75), "my/own-model": (1, 2)}, measure=False)
-    assert mixed.temperature_scale is None and mixed._weights_for(None) is None
-    assert mixed._weights_for("quality").temperature_scale == Settings.temperature_scale == 30.0
+    assert mixed.temperature_scale is None and mixed.weights_for(None) is None
+    # У безрейтинговой модели вектор уровня поля, а не случайный: опыта рейтингов у нее нет
+    assert mixed.candidates[1].prior_experience == 0
+    assert mixed.weights_for("quality").resolved_temperature_scale == Settings.temperature_scale == 30.0
 
 
 def test_factory_refuses_snapshot_with_foreign_series_names(monkeypatch):

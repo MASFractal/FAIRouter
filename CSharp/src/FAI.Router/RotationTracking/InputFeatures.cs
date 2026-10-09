@@ -33,7 +33,8 @@ public class InputFeatures
     public Specifications InputSpecifications { get; set; } = new Specifications();
 
     /// <summary>
-    /// Агрегация свойств в вектор
+    /// Агрегация свойств в вектор. Собирается заново при каждом чтении, поэтому в цикле по
+    /// кандидатам его читают один раз и держат в переменной.
     /// </summary>
     public Vector FeatureVector
     {

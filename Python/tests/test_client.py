@@ -103,6 +103,10 @@ def test_provider_is_recognized_by_key_shape(monkeypatch, tmp_path):
     assert base_url_for_key("sk-or-v1-abc") == OPENROUTER_URL
     assert base_url_for_key("rtr_live_abc") == FRACTALROUTER_URL
     assert base_url_for_key("frr_test_abc") == FRACTALROUTER_URL
+    # Незнакомый ключ не уходит чужому поставщику
+    for foreign in ("sk-proj-abc", "sk-ant-abc", "abc"):
+        with pytest.raises(ValueError, match="не опознан"):
+            base_url_for_key(foreign)
 
     monkeypatch.delenv("FRACTALROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -116,3 +120,34 @@ def test_provider_is_recognized_by_key_shape(monkeypatch, tmp_path):
     # Ключ FractalRouter в окружении главнее: наш поставщик первый
     monkeypatch.setenv("FRACTALROUTER_API_KEY", " rtr_live_env ")
     assert provider_from_environment(tmp_path) == (FRACTALROUTER_URL, "rtr_live_env")
+
+
+def test_budget_bounds_retries(monkeypatch):
+    """Срок на все попытки: исчерпан, тогда TimeoutError, а не еще одна попытка."""
+    attempts = []
+    clock = [0.0]
+
+    def urlopen(request, timeout):
+        attempts.append(timeout)
+        clock[0] += 5.0
+        raise http.client.RemoteDisconnected("обрыв")
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    client = OpenRouterClient("ключ", "m", retries=5, timeout=100)
+    with pytest.raises(TimeoutError):
+        client.complete_full([{"role": "user", "content": "x"}], budget=8)
+    assert attempts == [8, 3]
+
+
+def test_none_parameters_are_not_sent(monkeypatch):
+    bodies = []
+
+    def urlopen(request, timeout):
+        bodies.append(json.loads(request.data))
+        return _ok("ответ")
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    OpenRouterClient("ключ", "m").complete_full([{"role": "user", "content": "x"}], temperature=None, max_tokens=None)
+    assert "temperature" not in bodies[0] and "max_tokens" not in bodies[0]

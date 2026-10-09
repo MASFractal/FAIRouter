@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using AI.LLM.Core.Models.Common.Messages;
 using AI.LLM.Services.LLM;
 using FAI.Router.Catalog;
@@ -13,57 +14,28 @@ using FAI.Router.Training;
 namespace FAI.Router;
 
 /// <summary>
-/// Итог одного хода
-/// </summary>
-/// <param name="Text">Ответ исполнителя</param>
-/// <param name="Winner">Кто ответил</param>
-/// <param name="Trace">Трассировка хода</param>
-/// <param name="Requested">Распознанное задание</param>
-/// <param name="Actual">Замер ответа; пусто, если замер отключен</param>
-/// <param name="Score">Оценка судьи; пусто, если замер отключен</param>
-/// <param name="Critic">Разбор расхождений по пунктам формы</param>
-/// <param name="RoundId">Номер хода в журнале, под ним ставится отзыв</param>
-/// <param name="Content">Оценка содержания; пусто, если замер отключен</param>
-/// <param name="Assessment">Итоговая оценка ответа: содержание и форма; пусто, если замер отключен</param>
-/// <param name="Reached">Планка достаточности: истина, если кто-то до нее дотянул, ложь, если ход отдан сильнейшему при недоборе и человека стоит предупредить; пусто, если выбор шел без планки</param>
-public sealed record RouterAnswer(
-    string Text,
-    BaseRoutedElement Winner,
-    Tracert Trace,
-    Specifications? Requested,
-    Specifications? Actual,
-    double? Score,
-    DiffSpec? Critic,
-    long? RoundId,
-    ContentReview? Content = null,
-    double? Assessment = null,
-    bool? Reached = null);
-
-/// <summary>
-/// Цена модели за миллион токенов в валюте поставщика
-/// </summary>
-/// <param name="Input">За миллион входных токенов</param>
-/// <param name="Output">За миллион выходных токенов</param>
-public sealed record Price(double Input, double Output);
-
-/// <summary>
 /// Фасад: один объект на весь контур. Выбор исполнителя, выполнение с запасным вариантом,
 /// замер ответа, оценка судьи, журнал, отзывы и обучение. Клиент модели для распознавания
-/// задания и разбора ответа задается в Settings.LLM.
+/// задания и разбора ответа принадлежит роутеру (довод llm); не задан, тогда общий Settings.LLM.
 /// </summary>
+/// <remarks>
+/// Память (журнал, обучение, веса, калибровка) живет в <see cref="RouterMemory"/>, фасад ведет ход.
+/// </remarks>
 public class FaiRouter
 {
-    private readonly Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> _execute;
+    private readonly Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, CancellationToken, Task<string>> _execute;
     private readonly int _topk;
     private readonly bool _measure;
     private readonly RouteWeights? _weights;
     private readonly double? _bar;
     private readonly double? _temperatureScale;
     private readonly int _minRatings;
-    private readonly SpecOutputService _measurer = new();
+    private readonly SpecInputService? _recognizer;
+    private readonly SpecOutputService _measurer;
     private readonly ContentJudge _contentJudge;
-    private readonly RouterTrainer _routerTrainer = new(learningRate: 0.05f);
-    private readonly JudgeTrainer _judgeTrainer;
+    private readonly Random _random;
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _failedUntil = new();
+    private readonly RouterMemory? _memory;
 
     /// <summary>
     /// Кандидаты на исполнение
@@ -78,12 +50,12 @@ public class FaiRouter
     /// <summary>
     /// Журнал ходов; пусто, если база не задана
     /// </summary>
-    public SqliteTraceStore? Traces { get; }
+    public SqliteTraceStore? Traces => _memory?.Traces;
 
     /// <summary>
     /// Хранилище весов; пусто, если база не задана
     /// </summary>
-    public SqliteWeightsStore? Weights { get; }
+    public SqliteWeightsStore? Weights => _memory?.Weights;
 
     /// <summary>
     /// Готовая планка со своей калибровкой на все ходы. Задана, тогда уровень из конструктора и
@@ -92,7 +64,13 @@ public class FaiRouter
     public SufficiencyBar? Bar { get; set; }
 
     /// <summary>
-    /// Роутер целиком
+    /// На сколько отказавший кандидат (ошибка, таймаут, пустой ответ) выпадает из выбора этого роутера.
+    /// Без паузы модель, отвечающая ошибкой сервера, выбиралась снова на каждом ходе.
+    /// </summary>
+    public TimeSpan FailureCooldown { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Роутер целиком; исполнитель без токена отмены
     /// </summary>
     /// <param name="candidates">Кандидаты на исполнение</param>
     /// <param name="execute">Как получить ответ выбранного кандидата на диалог: он видит все реплики, а не одну</param>
@@ -103,7 +81,7 @@ public class FaiRouter
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов; пусто, тогда выбор по метрике R</param>
     /// <param name="minRatings">Сколько человеческих отзывов нужно, чтобы калибровка планки считалась осмысленной; до этого ход идет без планки</param>
-    /// <param name="temperatureScale">Свой множитель температуры роутера; пусто, тогда общий из Settings. Фабрики ставят пониженный Settings.PriorTemperatureScale, когда все кандидаты стартуют с начальных весов по рейтингам</param>
+    /// <param name="temperatureScale">Свой множитель температуры роутера для весов без своего множителя; пусто, тогда общий из Settings</param>
     public FaiRouter(
         IEnumerable<BaseRoutedElement> candidates,
         Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, Task<string>> execute,
@@ -115,6 +93,38 @@ public class FaiRouter
         double? bar = null,
         int minRatings = 3,
         double? temperatureScale = null)
+        : this(candidates, (candidate, messages, _) => execute(candidate, messages), databasePath, topk, measure, contentJudge, weights, bar, minRatings, temperatureScale)
+    {
+    }
+
+    /// <summary>
+    /// Роутер целиком; исполнитель получает токен отмены хода
+    /// </summary>
+    /// <param name="candidates">Кандидаты на исполнение</param>
+    /// <param name="execute">Как получить ответ выбранного кандидата на диалог с токеном отмены хода</param>
+    /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
+    /// <param name="topk">Сколько лучших участвуют в выборе</param>
+    /// <param name="measure">Оценивать ли ответ по форме и содержанию; стоит двух обращений к модели на ход</param>
+    /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий с клиентом llm</param>
+    /// <param name="weights">Профиль весов на все ходы; пусто, тогда веса из Settings</param>
+    /// <param name="bar">Планка достаточности на все ходы, вероятность лайка от 0 до 1; пусто, тогда выбор по метрике R</param>
+    /// <param name="minRatings">Сколько человеческих отзывов нужно для калибровки планки</param>
+    /// <param name="temperatureScale">Свой множитель температуры для весов без своего множителя; пусто, тогда общий</param>
+    /// <param name="llm">Клиент модели для распознавания задания и разбора ответа; пусто, тогда общий Settings.LLM</param>
+    /// <param name="seed">Зерно жребия выбора; пусто, значит случайное</param>
+    public FaiRouter(
+        IEnumerable<BaseRoutedElement> candidates,
+        Func<BaseRoutedElement, IReadOnlyList<LLMMessage>, CancellationToken, Task<string>> execute,
+        string? databasePath = null,
+        int topk = 5,
+        bool measure = true,
+        ContentJudge? contentJudge = null,
+        RouteWeights? weights = null,
+        double? bar = null,
+        int minRatings = 3,
+        double? temperatureScale = null,
+        LLMBase? llm = null,
+        int? seed = null)
     {
         if (bar is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(bar), bar, "Планка вне диапазона: нужна вероятность лайка от 0 до 1.");
@@ -127,15 +137,16 @@ public class FaiRouter
         _execute = execute;
         _topk = topk;
         _measure = measure;
-        _contentJudge = contentJudge ?? new ContentJudge();
-        _judgeTrainer = new JudgeTrainer(Judge, learningRate: 0.5f);
+        _recognizer = llm is null ? null : new SpecInputService(llm);
+        _measurer = new SpecOutputService(llm);
+        _contentJudge = contentJudge ?? new ContentJudge(llm);
+        _random = seed is null ? new Random() : new Random(seed.Value);
 
-        if (databasePath is null)
-            return;
+        if (_measure && _contentJudge.Model is { } judgeModel && Candidates.Any(candidate => candidate.Name == judgeModel))
+            System.Diagnostics.Trace.TraceWarning($"FAIRouter: судья содержания {judgeModel} среди кандидатов и будет судить сам себя; задайте ему другую модель (contentJudge).");
 
-        Traces = new SqliteTraceStore(databasePath);
-        Weights = new SqliteWeightsStore(databasePath);
-        Load();
+        if (databasePath is not null)
+            (_memory = new RouterMemory(databasePath, Candidates, Judge)).Load();
     }
 
     /// <summary>
@@ -146,21 +157,8 @@ public class FaiRouter
     /// <summary>
     /// Роутер над моделями FractalRouter (fractalrouter.ru): цены и возможности из его каталога, ответы
     /// кандидатов и работа судьи через него же, одним ключом. То же, что from_fractalrouter в версии на Python.
+    /// Доводы те же, что у <see cref="FromOpenAiCompatibleAsync"/>; цены в prices в рублях.
     /// </summary>
-    /// <param name="apiKey">Ключ FractalRouter вида rtr_live_...</param>
-    /// <param name="modelIds">Идентификаторы моделей из каталога, например anthropic/claude-sonnet-5; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
-    /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
-    /// <param name="prices">Цены в рублях за миллион токенов для моделей, которых нет в каталоге</param>
-    /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
-    /// <param name="baseUrl">Адрес FractalRouter; другой нужен только для своего стенда</param>
-    /// <param name="tokensPerSecond">Скорость по идентификаторам; каталог ее не сообщает</param>
-    /// <param name="benchmarks">Снимок замеров для начальных весов; пусто, значит снимок из комплекта сборки</param>
-    /// <param name="topk">Сколько лучших участвуют в выборе</param>
-    /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
-    /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
-    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
-    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
-    /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromFractalRouterAsync(
         string apiKey,
         IEnumerable<string>? modelIds = null,
@@ -181,21 +179,9 @@ public class FaiRouter
 
     /// <summary>
     /// Роутер над моделями OpenRouter: цены и возможности из его каталога, ответы через него же.
-    /// То же, что from_openrouter в версии на Python.
+    /// То же, что from_openrouter в версии на Python. Доводы те же, что у <see cref="FromOpenAiCompatibleAsync"/>;
+    /// цены в prices в долларах.
     /// </summary>
-    /// <param name="apiKey">Ключ OpenRouter</param>
-    /// <param name="modelIds">Идентификаторы моделей из каталога; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
-    /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
-    /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
-    /// <param name="tokensPerSecond">Скорость по идентификаторам; каталог ее не сообщает</param>
-    /// <param name="prices">Цены в долларах за миллион токенов для моделей, которых нет в каталоге</param>
-    /// <param name="benchmarks">Снимок замеров для начальных весов; пусто, значит снимок из комплекта сборки</param>
-    /// <param name="topk">Сколько лучших участвуют в выборе</param>
-    /// <param name="measure">Оценивать ли ответ по форме и содержанию</param>
-    /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
-    /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
-    /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
-    /// <param name="cancellationToken">Токен отмены</param>
     public static Task<FaiRouter> FromOpenRouterAsync(
         string apiKey,
         IEnumerable<string>? modelIds = null,
@@ -218,17 +204,19 @@ public class FaiRouter
     /// ключ уходит заголовком Bearer. Через того же поставщика и тем же ключом работает модель-судья.
     /// </summary>
     /// <remarks>
-    /// Цены кандидатов берутся из prices за миллион токенов в валюте поставщика; модели, которых там нет,
-    /// ищутся в каталоге catalogFetch (по умолчанию каталог OpenRouter) по идентификатору. Модель без цены
-    /// ни там, ни там это ошибка: без цены роутеру нечего взвешивать. Начальные веса кандидатов берутся из
-    /// снимка замеров, поэтому роутер небесполезен с первого хода, а обучение на отзывах его уточняет.
-    /// Пустая база на старте в порядке: веса в нее попадают при Save, ходы и отзывы при AskAsync и Feedback.
+    /// Цены кандидатов берутся из каталога catalogFetch (по умолчанию каталог OpenRouter), а prices их
+    /// задает или заменяет. Модель без цены ни там, ни там это ошибка: без цены роутеру нечего
+    /// взвешивать. Каталог недоступен по сети, тогда цены берутся из комплекта сборки. Начальные веса
+    /// кандидатов берутся из снимка замеров, поэтому роутер небесполезен с первого хода, а обучение на
+    /// отзывах его уточняет в том же пространстве признаков: среднее задач кандидат хранит при себе
+    /// (<see cref="BaseRoutedElement.TaskMean"/>), и ни загрузка, ни обучение его не меняют. Клиент
+    /// судьи принадлежит роутеру; общий Settings.LLM фабрика ставит, только если он еще не задан.
     /// </remarks>
     /// <param name="baseUrl">Адрес поставщика вида https://host/v1</param>
     /// <param name="apiKey">Ключ поставщика</param>
     /// <param name="modelIds">Идентификаторы моделей-кандидатов; один элемент ModelCatalog.Popular или ModelCatalog.All задает набор; пусто, значит популярные</param>
     /// <param name="databasePath">Файл весов и журнала; пусто, если память не нужна</param>
-    /// <param name="prices">Цены за миллион токенов для моделей, которых нет в каталоге</param>
+    /// <param name="prices">Цены за миллион токенов для моделей, которых нет в каталоге или чью цену надо заменить</param>
     /// <param name="judgeModel">Модель-судья, работает через тот же ключ</param>
     /// <param name="tokensPerSecond">Скорость по идентификаторам</param>
     /// <param name="benchmarks">Снимок замеров для начальных весов; пусто, значит снимок из комплекта сборки</param>
@@ -238,7 +226,7 @@ public class FaiRouter
     /// <param name="contentJudge">Свой судья содержания; не задан, тогда общий</param>
     /// <param name="weights">Профиль весов на все ходы: RouteWeights.Quality, Balance, Price или свои; пусто, тогда веса из Settings</param>
     /// <param name="bar">Планка достаточности на все ходы: обязательная вероятность лайка от 0 до 1, калибруется по журналу человеческих отзывов</param>
-    /// <param name="cancellationToken">Токен отмены</param>
+    /// <param name="cancellationToken">Токен отмены создания роутера; ходы отменяются своими токенами</param>
     public static async Task<FaiRouter> FromOpenAiCompatibleAsync(
         string baseUrl,
         string apiKey,
@@ -256,16 +244,20 @@ public class FaiRouter
         double? bar = null,
         CancellationToken cancellationToken = default)
     {
-        string[] requested = modelIds is null ? [ModelCatalog.Popular] : [.. modelIds];
+        string[] requested = modelIds is null ? [ModelCatalog.Popular] : [.. modelIds.Distinct()];
         prices ??= new Dictionary<string, Price>();
         benchmarks ??= BenchmarkSnapshot.LoadEmbedded();
 
         // Снимок с чужими именами серий тише пустого: приора не получил бы никто, и роутер молча
-        // стартовал бы со случайных весов, уверенный, что рейтинги у него есть
+        // стартовал бы с уровня поля, уверенный, что рейтинги у него есть
         if (benchmarks.Entries.Count > 0 && BenchmarkPrior.KnownSeries(benchmarks) == 0)
             throw new ArgumentException(
                 "В снимке замеров нет ни одной серии из профилей: он собран другой версией библиотеки. "
                 + "Пересоберите снимок или возьмите снимок из комплекта (benchmarks: null).", nameof(benchmarks));
+
+        // Снимок старше полугода описывает прошлое поколение моделей
+        if (benchmarks.Age?.TotalDays > 180)
+            System.Diagnostics.Trace.TraceWarning($"FAIRouter: снимку замеров {benchmarks.Age.Value.Days} дней, начальные веса устарели; пересоберите снимок.");
 
         Dictionary<string, ModelInfo> known = [];
         bool named = requested.Length == 1 && (string.Equals(requested[0], ModelCatalog.All, StringComparison.OrdinalIgnoreCase)
@@ -273,8 +265,11 @@ public class FaiRouter
 
         if (named || requested.Any(id => !prices.ContainsKey(id)))
         {
-            catalogFetch ??= token => ModelCatalog.FetchAsync(cancellationToken: token);
-            known = (await catalogFetch(cancellationToken).ConfigureAwait(false)).ToDictionary(model => model.Id);
+            IReadOnlyList<ModelInfo> catalog = await ModelCatalog.FetchOrPopularAsync(
+                catalogFetch ?? (token => ModelCatalog.FetchAsync(cancellationToken: token)), cancellationToken).ConfigureAwait(false);
+
+            foreach (ModelInfo model in catalog)
+                known.TryAdd(model.Id, model);
         }
 
         (IReadOnlyList<string> ids, bool _) = ModelCatalog.Select(requested, known);
@@ -282,46 +277,29 @@ public class FaiRouter
         if (ids.Count == 0)
             throw new ArgumentException("Список моделей пуст: роутеру не из кого выбирать.", nameof(modelIds));
 
-        List<BaseRoutedElement> candidates = [];
+        List<BaseRoutedElement> candidates = ModelCatalog.CreateCandidates(ids, known, prices, tokensPerSecond, benchmarks, Settings.TaskMean);
+        OpenAiCompatibleLlm judge = new(baseUrl, apiKey, judgeModel);
 
-        foreach (string id in ids)
-        {
-            ModelInfo info = prices.TryGetValue(id, out Price? price)
-                ? new ModelInfo(id, id, price.Input, price.Output, 0, 0, Capability.Code | Capability.Formulas)
-                : known.TryGetValue(id, out ModelInfo? found)
-                    ? found
-                    : throw new ArgumentException(
-                        $"У модели {id} нет цены в prices, и в каталоге поставщика ее нет. "
-                        + $"Задайте цену за миллион токенов: prices[\"{id}\"] = new Price(вход, выход).", nameof(modelIds));
+        // Общий клиент остается запасным для компонентов, собранных без клиента; чужой не затирается
+        if (!Settings.HasLLM)
+            Settings.LLM = judge;
 
-            double? speed = tokensPerSecond is not null && tokensPerSecond.TryGetValue(id, out double tps) ? tps : null;
-            candidates.Add(ModelCatalog.CreateElement(info, speed, benchmarks));
-        }
+        ConcurrentDictionary<string, LLMBase> clients = new();
 
-        Settings.LLM = new OpenAiCompatibleLlm(baseUrl, apiKey, judgeModel);
-
-        Dictionary<string, LLMBase> clients = [];
-
-        Task<string> Execute(BaseRoutedElement candidate, IReadOnlyList<LLMMessage> messages)
+        Task<string> Execute(BaseRoutedElement candidate, IReadOnlyList<LLMMessage> messages, CancellationToken token)
         {
             string name = candidate.Name ?? throw new InvalidOperationException("Кандидат без имени: не у кого спрашивать.");
-            LLMBase client;
+            LLMBase client = clients.GetOrAdd(name, id => new OpenAiCompatibleLlm(baseUrl, apiKey, id));
 
-            lock (clients)
-            {
-                if (!clients.TryGetValue(name, out client!))
-                    clients[name] = client = new OpenAiCompatibleLlm(baseUrl, apiKey, name);
-            }
-
-            return client.SendToLLM(messages, cancellationToken: cancellationToken);
+            return client.SendToLLM(messages, cancellationToken: token);
         }
 
         // Все кандидаты стартуют с начальных весов по рейтингам: долгая разведка не нужна, и множитель
         // температуры берется пониженный. Хотя бы один без рейтингов, тогда общий
-        bool informed = ids.All(id => BenchmarkPrior.GetVector(benchmarks, id) is not null);
+        bool informed = candidates.All(candidate => candidate.PriorExperience > 0);
 
         return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights, bar,
-            temperatureScale: informed ? Settings.PriorTemperatureScale : null);
+            temperatureScale: informed ? Settings.PriorTemperatureScale : null, llm: judge);
     }
 
     /// <summary>
@@ -331,32 +309,49 @@ public class FaiRouter
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
     /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
     /// <param name="bar">Планка на этот ход, обязательная вероятность лайка; пусто, тогда планка роутера</param>
-    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null) =>
-        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required, weights, bar);
+    /// <param name="cancellationToken">Токен отмены хода</param>
+    public Task<RouterAnswer> AskAsync(string prompt, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null, CancellationToken cancellationToken = default) =>
+        AskAsync([new LLMMessage(LLMMessage.UserRole, prompt)], required, weights, bar, cancellationToken);
 
     /// <summary>
     /// Один ход по диалогу: задача распознается по последнему сообщению пользователя, а
     /// исполнителю уходит весь диалог целиком. То же, что ask_messages в версии на Python.
     /// </summary>
+    /// <remarks>
+    /// Объем входа для цены и окна контекста считается по всему диалогу: исполнитель читает его весь.
+    /// Отмена токена прерывает ход; таймаут или сбой исполнителя передает работу запасному.
+    /// </remarks>
     /// <param name="messages">Реплики диалога по порядку</param>
     /// <param name="required">Требования к возможностям, которых нет в задании</param>
     /// <param name="weights">Профиль весов на этот ход; пусто, тогда профиль роутера</param>
     /// <param name="bar">Планка на этот ход, обязательная вероятность лайка; пусто, тогда планка роутера</param>
-    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null)
+    /// <param name="cancellationToken">Токен отмены хода</param>
+    public async Task<RouterAnswer> AskAsync(IEnumerable<LLMMessage> messages, Capability required = Capability.None, RouteWeights? weights = null, double? bar = null, CancellationToken cancellationToken = default)
     {
         LLMMessage[] dialog = [.. messages];
+        LLMMessage[] asked = [.. dialog.Where(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase))];
 
         // Задание распознается по тексту, поэтому картинка или иное содержимое без текста задачей не считается
-        string prompt = dialog
-            .LastOrDefault(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase))
-            ?.Content as string ?? "";
+        string prompt = asked.LastOrDefault()?.Content as string ?? "";
 
         if (string.IsNullOrWhiteSpace(prompt))
             throw new ArgumentException("В диалоге нет сообщения пользователя, задачу распознать не из чего.", nameof(messages));
 
-        int turns = dialog.Count(message => string.Equals(message.Role, LLMMessage.UserRole, StringComparison.OrdinalIgnoreCase));
-        Tracert trace = await Env.RouteAsync(prompt, Candidates, _topk, required, WeightsFor(weights), turns, SufficiencyBarFor(bar)).ConfigureAwait(false);
-        string text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog)).ConfigureAwait(false);
+        double inputTokens = dialog.Sum(message => (message.Content as string)?.Length ?? 0) / InputFeaturesService.EST_SYMBOL_PER_TOKEN;
+        Tracert trace = await Env.RouteAsync(prompt, Available(), _topk, required, WeightsFor(weights), asked.Length,
+            SufficiencyBarFor(bar), _recognizer, inputTokens, _random, cancellationToken).ConfigureAwait(false);
+
+        string text;
+
+        try
+        {
+            text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (string failed in trace.Failed)
+                _failedUntil[failed] = DateTimeOffset.UtcNow + FailureCooldown;
+        }
 
         Specifications? actual = null;
         double? score = null;
@@ -364,13 +359,13 @@ public class FaiRouter
         ContentReview? content = null;
         double? assessment = null;
 
-        if (_measure && !string.IsNullOrWhiteSpace(text) && trace.RequestedSpec is not null)
+        if (_measure && trace.RequestedSpec is not null)
         {
             try
             {
                 // Форма и содержание не зависят друг от друга: замер структуры и суд содержания идут разом
-                Task<Specifications> measuring = _measurer.GetSpecificationsAsync(text);
-                Task<ContentReview> reviewing = _contentJudge.ReviewAsync(prompt, trace.RequestedSpec, text);
+                Task<Specifications> measuring = _measurer.GetSpecificationsAsync(text, cancellationToken);
+                Task<ContentReview> reviewing = _contentJudge.ReviewAsync(prompt, trace.RequestedSpec, text, cancellationToken);
 
                 actual = await measuring.ConfigureAwait(false);
                 content = await reviewing.ConfigureAwait(false);
@@ -378,37 +373,24 @@ public class FaiRouter
                 critic = Judge.Criticize(trace.RequestedSpec, actual, content);
                 assessment = Judge.Assess(critic, content);
             }
-            catch (Exception error) when (error is not OperationCanceledException)
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested)
             {
-                // Сбой судьи (сеть, поставщик) ход не роняет: исполнитель уже ответил, и этот ответ
-                // дороже оценки. Ход идет в журнал без автоотзыва
-                System.Diagnostics.Trace.TraceWarning($"FAIRouter: ответ получен, но замерить его не удалось: {error.Message}");
-                actual = null;
-                content = null;
+                // Сбой судьи (сеть, поставщик, таймаут, неполный вердикт) ход не роняет, ответ дороже оценки: ход идет
+                // в журнал без автоотзыва. В журнал процесса только тип и код ошибки: текст исключения движка несет запрос
+                System.Diagnostics.Trace.TraceWarning($"FAIRouter: ответ получен, но замерить его не удалось ({error.GetType().Name}{(ProviderRejectedException.Find(error) is { } rejected ? $", код {rejected.Code}" : "")}).");
+                (actual, content, score, critic, assessment) = (null, null, null, null, null);
             }
         }
 
-        long? roundId = null;
-
-        if (Traces is not null)
-        {
-            roundId = Traces.Append(trace, trace.RequestedSpec, actual, prompt);
-
-            // Автоотзыв это итоговая оценка по содержанию и форме; человеческий, если придет, его перезапишет
-            if (assessment is not null)
-                Traces.SetFeedback(roundId.Value, new Feedback
-                {
-                    FType = FeedbackType.Auto,
-                    FeadbackScore = assessment.Value
-                });
-        }
+        long? roundId = _memory?.Append(trace, actual, prompt, assessment);
 
         return new RouterAnswer(text, trace.Winner, trace, trace.RequestedSpec, actual, score, critic, roundId, content, assessment, trace.BarReached);
     }
 
     /// <summary>
     /// Отзыв человека на ход: число от 0 до 1. Единица означает отличный ответ, ноль никуда не годный,
-    /// 0,5 так себе. Отзыв перезаписывает автоотзыв судьи, на нем учатся и роутер, и судья.
+    /// 0,5 так себе. Отзыв перезаписывает автоотзыв судьи, на нем учатся и роутер, и судья; ход снова
+    /// попадает в очередь обучения.
     /// </summary>
     /// <param name="roundId">Номер хода из RouterAnswer</param>
     /// <param name="score">Оценка от нуля (плохо) до единицы (отлично)</param>
@@ -418,17 +400,13 @@ public class FaiRouter
         if (score is < 0 or > 1 || double.IsNaN(score))
             throw new ArgumentOutOfRangeException(nameof(score), score, "Отзыв вне диапазона: нужно число от 0 (плохо) до 1 (отлично).");
 
-        RequireJournal().SetFeedback(roundId, new Feedback
-        {
-            FType = human ? FeedbackType.Human : FeedbackType.Auto,
-            FeadbackScore = score
-        });
+        Memory().Feedback(roundId, score, human);
     }
 
     /// <summary>
     /// Веса хода: названные для хода, иначе веса роутера, иначе общие из Settings. Свой множитель
-    /// температуры роутера подставляется в веса, у которых множитель общий (веса по умолчанию и
-    /// готовые профили Quality, Balance, Price); веса с собственным множителем берутся как есть.
+    /// температуры роутера подставляется в веса без своего множителя (веса по умолчанию и готовые
+    /// профили Quality, Balance, Price); веса с заданным множителем берутся как есть.
     /// </summary>
     /// <param name="weights">Веса этого хода; пусто, тогда веса роутера</param>
     public RouteWeights? WeightsFor(RouteWeights? weights = null)
@@ -440,9 +418,7 @@ public class FaiRouter
 
         RouteWeights resolved = chosen ?? Settings.Current;
 
-        return resolved.TemperatureScale == Settings.TemperatureScale
-            ? resolved with { TemperatureScale = _temperatureScale.Value }
-            : resolved;
+        return resolved.TemperatureScale is null ? resolved with { TemperatureScale = _temperatureScale } : resolved;
     }
 
     /// <summary>
@@ -450,6 +426,10 @@ public class FaiRouter
     /// <see cref="Bar"/> берется как есть. Пока отзывов меньше minRatings, планки нет и ход идет по
     /// метрике R: калибровать не на чем, а планка без калибровки отсекала бы наугад.
     /// </summary>
+    /// <remarks>
+    /// Калибровка запоминается и пересчитывается только после человеческого отзыва, обучения или
+    /// загрузки: прежде каждый ход читал тысячу строк журнала и заново решал задачу Ньютона.
+    /// </remarks>
     /// <param name="level">Обязательная вероятность лайка; пусто, тогда уровень роутера</param>
     public SufficiencyBar? SufficiencyBarFor(double? level = null)
     {
@@ -464,92 +444,57 @@ public class FaiRouter
         if (bar is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(level), bar, "Планка вне диапазона: нужна вероятность лайка от 0 до 1.");
 
-        if (Traces is null)
+        if (_memory is null)
             throw new InvalidOperationException("Планка по уровню требует журнала: создайте роутер с databasePath либо задайте готовую Bar с калибровкой.");
 
-        IReadOnlyList<(double Quality, double Score)> pairs = CalibrationPairs();
+        (Calibration fit, double rate, int count) = _memory.CurrentCalibration();
 
-        if (pairs.Count < _minRatings)
-            return null;
-
-        double rate = pairs.Average(pair => pair.Score);
-
-        return new SufficiencyBar(bar.Value, Calibration.Fit(pairs), rate);
+        return count < _minRatings ? null : new SufficiencyBar(bar.Value, fit, rate);
     }
 
     /// <summary>
-    /// Пары для калибровки планки из журнала: прогноз качества победителя на признаках той задачи
-    /// при нынешних весах и оценка человека. Автоотзывы не берутся: планка обещает вероятность
-    /// лайка человека, а не согласие судьи с самим собой.
+    /// Пары для калибровки планки из журнала: прогноз качества победителя в момент выбора и оценка
+    /// человека, последние тысяча человеческих отзывов. Автоотзывы не берутся: планка обещает
+    /// вероятность лайка человека, а не согласие судьи с самим собой.
     /// </summary>
-    public IReadOnlyList<(double Quality, double Score)> CalibrationPairs() =>
-        [.. RequireJournal().ReadRated(Candidates)
-            .Where(round => round.Feedback.FType == FeedbackType.Human)
-            .Select(round => (round.Trace.Winner.GetQualityScore(round.Trace.InputFeatureVector), round.Feedback.FeadbackScore))];
+    public IReadOnlyList<(double Quality, double Score)> CalibrationPairs() => Memory().CalibrationPairs();
 
     /// <summary>
-    /// Обучение по накопленному журналу. Возвращает ошибку последней эпохи.
+    /// Обучение по ходам журнала, которые еще не учили, в порядке записи. Возвращает ошибку
+    /// последней эпохи раздельно у роутера и судьи; к double приводится их суммой.
     /// </summary>
-    /// <param name="epochs">Сколько раз пройти по выборке</param>
-    public double Train(int epochs = 1)
+    /// <remarks>
+    /// Каждый ход учит один раз: прежде каждый вызов заново проходил тысячу последних ходов от уже
+    /// обученных весов, и многократный Train переобучал на них же. Ход считается обученным после
+    /// <see cref="Save"/>: без сохранения веса пропали бы, а ход остался бы отмеченным. Новый отзыв
+    /// возвращает ход в очередь.
+    /// </remarks>
+    /// <param name="epochs">Сколько раз пройти по новым ходам</param>
+    public TrainingLoss Train(int epochs = 1) => Memory().Train(epochs);
+
+    /// <summary>
+    /// Сохраняет одной транзакцией векторы, которых касалось обучение (вместе с их средним задач), и
+    /// матрицу судьи, затем отмечает обученные ходы. Необученные векторы не пишутся: при загрузке они
+    /// затирали бы начальные веса по свежему снимку рейтингов.
+    /// </summary>
+    public void Save() => Memory().Save();
+
+    /// <summary>
+    /// Восстанавливает веса со средним задач, матрицу судьи и опыт кандидатов. Вектор чужой
+    /// размерности пропускается с предупреждением, остальные загружаются.
+    /// </summary>
+    public void Load() => Memory().Load();
+
+    // Кандидаты без недавнего отказа; отказали все, тогда все: пауза не повод остаться без исполнителя
+    private BaseRoutedElement[] Available()
     {
-        SqliteTraceStore journal = RequireJournal();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        BaseRoutedElement[] healthy = [.. Candidates.Where(candidate =>
+            candidate.Name is null || !_failedUntil.TryGetValue(candidate.Name, out DateTimeOffset until) || until <= now)];
 
-        // Среднее по задачам задается один раз: веса обучены в пространстве с этим средним
-        Settings.TaskMean ??= journal.GetFeatureMean();
-
-        IReadOnlyList<TrainingRound> sample = journal.ReadRated(Candidates);
-        double loss = 0;
-
-        for (int epoch = 0; epoch < epochs; epoch++)
-        {
-            loss = 0;
-
-            foreach (TrainingRound round in sample)
-            {
-                loss += _routerTrainer.Train(round.Trace, round.Feedback);
-
-                // Судья учится только у человека. Автоотзыв это разбор расхождений по пунктам,
-                // и учить по нему судью значило бы подгонять одну автоматическую оценку под
-                // другую, а человек из этого круга выпадал бы совсем
-                if (round.Feedback.FType == FeedbackType.Human && round.Requested is not null && round.Actual is not null)
-                    loss += _judgeTrainer.Train(round.Requested, round.Actual, round.Feedback.FeadbackScore);
-            }
-        }
-
-        journal.LoadStatistics(Candidates);
-
-        return loss;
+        return healthy.Length > 0 ? healthy : [.. Candidates];
     }
 
-    /// <summary>
-    /// Сохраняет веса, матрицу судьи и среднее по задачам
-    /// </summary>
-    public void Save()
-    {
-        SqliteWeightsStore store = RequireWeights();
-        store.Save(Candidates);
-        store.Save(Judge);
-
-        if (Settings.TaskMean is not null)
-            store.SaveTaskMean(Settings.TaskMean);
-    }
-
-    /// <summary>
-    /// Восстанавливает веса, матрицу судьи, среднее по задачам и опыт кандидатов
-    /// </summary>
-    public void Load()
-    {
-        SqliteWeightsStore store = RequireWeights();
-        store.Load(Candidates);
-        store.Load(Judge);
-        Settings.TaskMean = store.LoadTaskMean() ?? Settings.TaskMean;
-        Traces?.LoadStatistics(Candidates);
-    }
-
-    private SqliteTraceStore RequireJournal() =>
-        Traces ?? throw new InvalidOperationException("Журнал не задан: создайте роутер с databasePath.");
-
-    private SqliteWeightsStore RequireWeights() =>
-        Weights ?? throw new InvalidOperationException("Хранилище не задано: создайте роутер с databasePath.");
+    private RouterMemory Memory() =>
+        _memory ?? throw new InvalidOperationException("Журнал и хранилище не заданы: создайте роутер с databasePath.");
 }

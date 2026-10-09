@@ -54,8 +54,8 @@ public sealed class ContentReview
     public const string SourceQuality = "Качество источников";
     public const string FitForPurpose = "Пригодность для дела";
 
-    /// <summary>Оценка, ниже которой критерий считается проваленным</summary>
-    public const double PassMark = 0.6;
+    /// <summary>Оценка, ниже которой критерий или утверждение считаются проваленными: тот же порог, что у критика</summary>
+    public const double PassMark = DiffSpec.PassMark;
 
     /// <summary>Критерии по порядку</summary>
     public IReadOnlyList<ContentCriterion> Criteria { get; }
@@ -77,7 +77,7 @@ public sealed class ContentReview
 
     /// <summary>Оценка содержания: среднее по критериям, которые относятся к задаче</summary>
     public double Score =>
-        Criteria.Where(item => item.Score is not null).Select(item => item.Score!.Value).DefaultIfEmpty(1).Average();
+        Criteria.Select(item => item.Score).OfType<double>().Where(double.IsFinite).DefaultIfEmpty(1).Average();
 
     public ContentReview(
         IReadOnlyList<ContentCriterion> criteria, IReadOnlyList<FactClaim> claims, IReadOnlyList<string> issues,
@@ -96,10 +96,14 @@ public sealed class ContentReview
     public double? Get(string name) => Criteria.FirstOrDefault(item => item.Name == name)?.Score;
 
     /// <summary>
-    /// Фактология по утверждениям: средняя вероятность истинности; утверждений нет, значит пусто
+    /// Фактология по утверждениям: средняя вероятность истинности; утверждений с числом нет, значит пусто
     /// </summary>
-    public static double? FactualityOf(IReadOnlyCollection<FactClaim> claims) =>
-        claims.Count == 0 ? null : claims.Average(claim => Math.Clamp(claim.Truth, 0, 1));
+    public static double? FactualityOf(IReadOnlyCollection<FactClaim> claims)
+    {
+        double[] truths = [.. claims.Select(claim => claim.Truth).Where(double.IsFinite)];
+
+        return truths.Length == 0 ? null : truths.Average(truth => Math.Clamp(truth, 0, 1));
+    }
 
     /// <summary>
     /// Отчет: оценка содержания, проваленные критерии, ложные утверждения и замечания
@@ -112,7 +116,7 @@ public sealed class ContentReview
         foreach (ContentCriterion criterion in Criteria.Where(item => item.Score < PassMark))
             report.AppendLine($"  {criterion.Name}: {Format(criterion.Score!.Value)}");
 
-        foreach (FactClaim claim in Claims.Where(item => item.Truth < 0.5))
+        foreach (FactClaim claim in Claims.Where(item => item.Truth < PassMark))
             report.AppendLine($"  Сомнительное утверждение ({Format(claim.Truth)}): {claim.Text}");
 
         foreach (string issue in Issues)

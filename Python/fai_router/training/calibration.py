@@ -17,8 +17,9 @@ class Calibration:
     сказать «этот лучше того», но не «этот сойдет». Планке достаточности нужна абсолютная шкала, и
     калибровка переводит прогноз в долю лайков, которую такой прогноз получал на деле.
 
-    Решатель тот же, что в версии на C#, шаг в шаг: метод Ньютона на системе 2×2, поэтому на одних
-    и тех же парах обе версии дают одни и те же A и B."""
+    Решатель тот же, что в версии на C#, шаг в шаг: метод Ньютона на системе 2×2 с ограничением
+    длины шага и уменьшением его вдвое, поэтому на одних и тех же парах обе версии дают одни и те же
+    A и B."""
 
     A: float
     B: float
@@ -27,6 +28,10 @@ class Calibration:
     MAX_ITERATIONS = 50
     # Шаг, меньше которого решение считается найденным
     TOLERANCE = 1e-10
+    # Наибольшая длина шага Ньютона: прогноз и сдвиг живут на шкале единиц
+    MAX_STEP = 10.0
+    # Сколько раз шаг можно уменьшить вдвое, прежде чем принять его как есть
+    MAX_HALVINGS = 30
     # Слабая привязка сдвига к доле лайков. Когда все оценки одинаковые, у сдвига нет конечного
     # оптимума, и без привязки он уходил бы в бесконечность
     SHIFT_RIDGE = 1e-3
@@ -68,18 +73,42 @@ class Calibration:
                 h_bb += w
 
             det = h_aa * h_bb - h_ab * h_ab
-            if det < 1e-18:
+            if not det >= 1e-18:
                 break
 
             d_a = (h_bb * g_a - h_ab * g_b) / det
             d_b = (h_aa * g_b - h_ab * g_a) / det
-            a -= d_a
-            b -= d_b
-
-            if abs(d_a) < cls.TOLERANCE and abs(d_b) < cls.TOLERANCE:
+            if not (math.isfinite(d_a) and math.isfinite(d_b)):
                 break
 
-        return cls(a, b)
+            # Шаг ограничен и уменьшается вдвое, пока не снизит цель: на выбросах и почти
+            # разделимых выборках полный шаг Ньютона перескакивал минимум и уходил в бесконечность
+            norm = math.sqrt(d_a * d_a + d_b * d_b)
+            scale = cls.MAX_STEP / norm if norm > cls.MAX_STEP else 1.0
+            current = _objective(pairs, a, b, ridge, anchor, cls.SHIFT_RIDGE)
+            for _ in range(cls.MAX_HALVINGS):
+                if _objective(pairs, a - scale * d_a, b - scale * d_b, ridge, anchor, cls.SHIFT_RIDGE) <= current + 1e-12:
+                    break
+                scale /= 2
+
+            a -= scale * d_a
+            b -= scale * d_b
+
+            if abs(scale * d_a) < cls.TOLERANCE and abs(scale * d_b) < cls.TOLERANCE:
+                break
+
+        return cls(a, b) if math.isfinite(a) and math.isfinite(b) else cls(0.0, anchor)
+
+
+def _objective(pairs: list[tuple[float, float]], a: float, b: float, ridge: float, anchor: float,
+               shift_ridge: float) -> float:
+    """Цель подгонки: логистическая ошибка плюс стягивание наклона к нулю и сдвига к доле лайков."""
+    total = 0.5 * ridge * a * a + 0.5 * shift_ridge * (b - anchor) * (b - anchor)
+    for q, y in pairs:
+        z = min(max(a * q + b, -35.0), 35.0)
+        # log(1 + e^z) без переполнения
+        total += max(z, 0.0) + math.log1p(math.exp(-abs(z))) - y * z
+    return total
 
 
 def _sigmoid(x: float) -> float:

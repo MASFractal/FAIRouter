@@ -1,3 +1,4 @@
+using FAI.Router.JudgeLogic;
 using FAI.Router.RotationTracking;
 using FAI.Router.Training;
 
@@ -6,7 +7,7 @@ namespace FAI.Router.Services;
 /// <summary>
 /// Сервис вычисления признаков входа
 /// </summary>
-public class InputFeaturesService 
+public class InputFeaturesService
 {
     /// <summary>
     /// Символов на токен
@@ -16,22 +17,44 @@ public class InputFeaturesService
     private static readonly SpecInputService SpecService = new();
 
     /// <summary>
-    /// Полные признаки запроса: объем оценивается арифметикой, ТЗ распознает модель
+    /// Полные признаки запроса: объем оценивается арифметикой, ТЗ распознает модель. Сбой
+    /// распознавания хода не роняет: признаки остаются как у <see cref="GetFeatures"/>.
     /// </summary>
     /// <param name="text">Текст запроса</param>
-    public static async Task<InputFeatures> GetFeaturesAsync(string text)
+    /// <param name="specs">Кто распознает задание; пусто, значит общий распознаватель через Settings.LLM</param>
+    /// <param name="cancellationToken">Токен отмены</param>
+    public static async Task<InputFeatures> GetFeaturesAsync(string text, ISpecService? specs = null, CancellationToken cancellationToken = default)
     {
         InputFeatures features = GetFeatures(text);
-        features.InputSpecifications = await SpecService.GetSpecificationsAsync(text).ConfigureAwait(false);
 
-        // Объем ответа берется из распознанного заказа; догадка по длине промпта остается на
-        // случай, когда заказ объема не назвал. Раньше цена и время считались только по промпту:
-        // «напиши обзор на двадцать тысяч знаков» это короткий запрос, и ход выглядел дешевым и
-        // быстрым у всех кандидатов разом
-        if (features.InputSpecifications.SymbolLength > 0)
-            features.LenAnswer = features.InputSpecifications.SymbolLength / EST_SYMBOL_PER_TOKEN;
+        if (await RecognizeAsync(text, specs, cancellationToken).ConfigureAwait(false) is { } recognized)
+            Apply(features, recognized);
 
         return features;
+    }
+
+    /// <summary>
+    /// Распознанное задание; пусто, если распознать не удалось
+    /// </summary>
+    /// <remarks>
+    /// Ловится все, кроме отмены вызывающим: обрезанный или негодный ответ модели, сеть, отказ
+    /// поставщика, исчерпанный бюджет. Прежде такой сбой ронял ход до выбора исполнителя. В журнал
+    /// пишется только тип ошибки: текст исключения движка несет начало запроса пользователя.
+    /// </remarks>
+    /// <param name="text">Текст запроса</param>
+    /// <param name="specs">Кто распознает задание; пусто, значит общий распознаватель через Settings.LLM</param>
+    /// <param name="cancellationToken">Токен отмены</param>
+    public static async Task<Specifications?> RecognizeAsync(string text, ISpecService? specs = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await (specs ?? SpecService).GetSpecificationsAsync(text, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested)
+        {
+            System.Diagnostics.Trace.TraceWarning($"FAIRouter: задание не распознано ({error.GetType().Name}), выбор идет по типовой задаче.");
+            return null;
+        }
     }
 
     /// <summary>
@@ -64,4 +87,18 @@ public class InputFeaturesService
     /// <param name="text">Текст</param>
     /// <returns></returns>
     public static double GetLenInput(string text) => text.Length / EST_SYMBOL_PER_TOKEN;
+
+    /// <summary>
+    /// Ставит распознанное задание в признаки. Объем ответа берется из заказа; догадка по длине
+    /// промпта остается на случай, когда заказ объема не назвал. Раньше цена и время считались только
+    /// по промпту: «напиши обзор на двадцать тысяч знаков» это короткий запрос, и ход выглядел дешевым
+    /// и быстрым у всех кандидатов разом.
+    /// </summary>
+    internal static void Apply(InputFeatures features, Specifications recognized)
+    {
+        features.InputSpecifications = recognized;
+
+        if (recognized.SymbolLength > 0)
+            features.LenAnswer = recognized.SymbolLength / EST_SYMBOL_PER_TOKEN;
+    }
 }

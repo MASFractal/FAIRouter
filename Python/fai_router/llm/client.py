@@ -24,15 +24,22 @@ KEY_VARIABLES = (("FRACTALROUTER_API_KEY", FRACTALROUTER_URL), ("OPENROUTER_API_
 
 
 def base_url_for_key(api_key: str) -> str:
-    """Поставщик по виду ключа: ключи OpenRouter начинаются с sk-or-, ключи FractalRouter с
-    rtr_live_ или frr_test_. Незнакомый ключ считается ключом FractalRouter."""
-    return OPENROUTER_URL if api_key.startswith("sk-or-") else FRACTALROUTER_URL
+    """Поставщик по виду ключа: ключи OpenRouter начинаются с sk-or-, ключи FractalRouter с rtr_
+    (rtr_live_) или frr_ (frr_test_). Незнакомый ключ это ошибка: прежде он считался ключом
+    FractalRouter, и ключ OpenAI (sk-proj-) или Anthropic (sk-ant-) уходил заголовком Bearer чужому
+    поставщику. Для другого поставщика адрес задается явно."""
+    if api_key.startswith("sk-or-"):
+        return OPENROUTER_URL
+    if api_key.startswith(("rtr_", "frr_")):
+        return FRACTALROUTER_URL
+    raise ValueError("Поставщик по ключу не опознан (знакомы sk-or-, rtr_ и frr_): задайте адрес поставщика "
+                     "явно, например FaiRouter.from_openai_compatible(адрес, ключ, ...).")
 
 
 def provider_from_environment(*key_directories: "str | os.PathLike[str]") -> tuple[str, str]:
     """Поставщик и ключ из окружения: FRACTALROUTER_API_KEY дает FractalRouter, OPENROUTER_API_KEY
     дает OpenRouter, иначе ключ читается из key.txt в указанных каталогах и поставщик опознается по
-    виду ключа. Пустой ключ означает, что ничего не найдено."""
+    виду ключа (незнакомый вид это ошибка). Пустой ключ означает, что ничего не найдено."""
     for variable, base_url in KEY_VARIABLES:
         key = os.environ.get(variable, "").strip()
         if key:
@@ -78,19 +85,22 @@ class OpenRouterClient:
 
     def complete_full(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         schema: dict[str, Any] | None = None,
         schema_name: str = "answer",
-        temperature: float = 0.0,
-        max_tokens: int = 3012,
+        temperature: float | None = 0.0,
+        max_tokens: int | None = 3012,
+        budget: float | None = None,
     ) -> dict[str, Any]:
-        """Полный ответ поставщика, включая расход токенов."""
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        """Полный ответ поставщика, включая расход токенов и причину окончания. temperature и
+        max_tokens, равные None, в запрос не идут: тогда действуют умолчания поставщика. budget это
+        срок в секундах на все попытки вместе; исчерпан, тогда TimeoutError."""
+        deadline = None if budget is None else time.monotonic() + budget
+        body: dict[str, Any] = {"model": self.model, "messages": messages}
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
         if schema is not None:
             body["response_format"] = {
                 "type": "json_schema",
@@ -103,9 +113,12 @@ class OpenRouterClient:
                 pause = self.retry_pause * 2 ** (attempt - 1)
                 log.warning("%s: повтор %d из %d через %.0f с после ошибки: %s",
                             self._where(), attempt, self.retries, pause, last)
-                time.sleep(pause)
+                time.sleep(pause if deadline is None else max(0.0, min(pause, deadline - time.monotonic())))
+            timeout = self.timeout if deadline is None else min(self.timeout, deadline - time.monotonic())
+            if timeout <= 0:
+                raise TimeoutError(f"{self._where()}: модель не ответила за {budget:.0f} с.") from last
             try:
-                return self._post(data)
+                return self._post(data, timeout)
             except urllib.error.HTTPError as error:
                 if error.code not in _RETRY_STATUSES:
                     raise LlmRequestError(f"{self._where()}: поставщик ответил {error.code} {error.reason}: "
@@ -119,7 +132,7 @@ class OpenRouterClient:
             "Если ошибка повторяется, поставщик недоступен из вашей сети (блокировка или прокси); "
             "попробуйте другой base_url, например FaiRouter.from_fractalrouter.") from last
 
-    def _post(self, data: bytes) -> dict[str, Any]:
+    def _post(self, data: bytes, timeout: float) -> dict[str, Any]:
         request = urllib.request.Request(
             self.url,
             data=data,
@@ -127,13 +140,13 @@ class OpenRouterClient:
                      "X-Title": "FAIRouter"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _where(self) -> str:
         return f"{self.base_url} ({self.model})"
 
-    def complete(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
+    def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         """Текст ответа модели."""
         data = self.complete_full(messages, **kwargs)
         return data["choices"][0]["message"]["content"] or ""

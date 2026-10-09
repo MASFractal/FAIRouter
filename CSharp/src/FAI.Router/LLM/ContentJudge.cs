@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AI.LLM.Core.Models.Common.Messages;
@@ -13,29 +14,39 @@ namespace FAI.Router.LLM;
 /// наполненность структуры, источники и пригодность для дела.
 /// </summary>
 /// <remarks>
-/// По каждому смысловому пункту и каждому ограничению заказа судья отвечает отдельно, а уровень
-/// экспертности ответа называет по шкале экспертности заказа: критик сверяет с заданием каждую из
-/// этих величин. Факты проверяются так же, как в замере фактологии: из ответа
+/// По каждому смысловому пункту и каждому ограничению заказа судья отвечает отдельно, с номером
+/// пункта, а уровень экспертности ответа называет по шкале экспертности заказа: критик сверяет с
+/// заданием каждую из этих величин. Факты проверяются так же, как в замере фактологии: из ответа
 /// выписываются атомарные проверяемые утверждения, и у каждого своя вероятность истинности. Без
 /// проверки по вебу эту вероятность ставит сама модель-судья, то есть она сама себе фактчекер.
-/// Хост с веб-поиском передает проверку делегатом, и тогда вероятность дает он.
+/// Хост с веб-поиском передает проверку делегатом, и тогда вероятность дает он. Неполный ответ
+/// судьи (нет оценки хотя бы одного критерия) это сбой судьи, а не единица: оценки нет, и
+/// автоотзыв по ходу не пишется. Задание и ответ идут судье внутри меток со случайным именем
+/// (<see cref="PromptData"/>), указания внутри них судья не исполняет.
 /// </remarks>
 public class ContentJudge
 {
     /// <summary>Сколько утверждений проверяется: больше дорого, меньше не хватает для средней</summary>
     public const int MaxClaims = 12;
 
-    private const int AnswerChars = 24_000;
+    /// <summary>Сколько знаков ответа судья видит всегда; длинный заказ поднимает предел до <see cref="MaxAnswerChars"/></summary>
+    internal const int AnswerChars = 24_000;
 
-    private const string SystemPrompt =
+    /// <summary>Верхний предел показанного судье ответа: больше удорожает суд, а судья хуже держит длинный текст</summary>
+    private const int MaxAnswerChars = 48_000;
+
+    private static readonly string SystemPrompt =
         "Ты строгий эксперт-приемщик. Оцени СОДЕРЖАНИЕ ответа на задание, а не оформление: объем, "
-        + "число разделов и таблиц проверяет код. Выпиши до 12 атомарных проверяемых утверждений "
+        + $"число разделов и таблиц проверяет код. Выпиши до {MaxClaims} атомарных проверяемых утверждений "
         + "ответа (даты, числа, имена, нормы, характеристики) и для каждого вероятность, что оно "
-        + "верно; мнения, оценки и вымысел не выписывай. По каждому смысловому пункту задания, в том "
-        + "же порядке, оцени, насколько он раскрыт; по каждому ограничению, в том же порядке, "
-        + "соблюдено ли оно. Уровень экспертности ответа оцени по той же шкале, что и экспертность "
-        + "задания. Затем оцени критерии от 0 до 1 по опорным точкам. В issues перечисли конкретные "
-        + "замечания по содержанию: что именно неверно или упущено и где. Ответ хорош, значит issues пусто.";
+        + "верно; мнения, оценки и вымысел не выписывай. По каждому смысловому пункту задания, с его "
+        + "номером, оцени, насколько он раскрыт; по каждому ограничению, с его номером, соблюдено ли "
+        + "оно. Уровень экспертности ответа оцени по той же шкале, что и экспертность задания. Затем "
+        + "оцени критерии от 0 до 1 по опорным точкам. Длина и многословие сами по себе не достоинство: "
+        + "повторы, вода и лишнее снижают пригодность для дела, короткий точный ответ не хуже длинного. "
+        + "Если ответ обрезан для проверки, не считай упущенным пункт или ограничение, которые могли "
+        + "оказаться в отрезанной части: оценивай показанное. В issues перечисли конкретные замечания по "
+        + "содержанию: что именно неверно или упущено и где. Ответ хорош, значит issues пусто.";
 
     private static readonly string SchemaJson = BuildSchema();
 
@@ -45,9 +56,21 @@ public class ContentJudge
     private readonly Func<string, CancellationToken, Task<double?>>? _verify;
 
     /// <summary>
+    /// Бюджет времени на суд, все попытки вместе: у движка таймаут 18 минут на попытку, и суд мог
+    /// держать ход дольше, чем шел сам ответ
+    /// </summary>
+    public TimeSpan Budget { get; init; } = TimeSpan.FromMinutes(3);
+
+    /// <summary>Модель судьи, если клиент знает свою модель; пусто, если не знает</summary>
+    public string? Model => (_llm ?? (Settings.HasLLM ? Settings.LLM : null)) is OpenAiCompatibleLlm client ? client.Model : null;
+
+    /// <summary>
     /// Судья содержания
     /// </summary>
-    /// <param name="llm">Клиент модели; не задан, тогда берется общий Settings.LLM</param>
+    /// <param name="llm">
+    /// Клиент модели; не задан, тогда берется общий Settings.LLM. Своя модель судьи задается здесь:
+    /// модель, которая судит сама себя (судья среди кандидатов), завышает себе оценки.
+    /// </param>
     /// <param name="verify">
     /// Проверка утверждения по внешнему источнику (веб-поиск хоста): вероятность истинности или
     /// пусто, если проверить не удалось. Не задана, тогда вероятность ставит модель-судья.
@@ -65,35 +88,26 @@ public class ContentJudge
     /// <param name="requested">Распознанное задание: смысловые пункты, ограничения, нужны ли источники</param>
     /// <param name="answer">Ответ исполнителя</param>
     /// <param name="cancellationToken">Токен отмены</param>
+    /// <exception cref="InvalidDataException">Судья дважды ответил неполно или не по схеме</exception>
+    /// <exception cref="TimeoutException">Судья не уложился в <see cref="Budget"/></exception>
     public async Task<ContentReview> ReviewAsync(
         string task, Specifications requested, string answer, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(answer))
             throw new ArgumentException("Ответ не может быть пустым.", nameof(answer));
 
-        GenerateSettings settings = new(temperature: 0)
-        {
-            ResponseFormat = ResponseFormat.CreateJsonSchema("content_review", SchemaJson)
-        };
-
+        string tag = PromptData.NewTag();
         List<LLMMessage> messages =
         [
-            new LLMMessage(LLMMessage.SystemRole, SystemPrompt),
-            new LLMMessage(LLMMessage.UserRole, UserMessage(task, requested, answer))
+            new LLMMessage(LLMMessage.SystemRole, SystemPrompt + " " + PromptData.Rule(tag)),
+            new LLMMessage(LLMMessage.UserRole, UserMessage(tag, task, requested, answer))
         ];
 
-        string json = await (_llm ?? Settings.LLM).SendToLLM(messages, settings, cancellationToken).ConfigureAwait(false);
-        Verdict verdict = Read(json);
+        GenerateSettings settings = JsonCall.Settings("content_review", SchemaJson);
+        Verdict verdict = await JsonCall.AskAsync(_llm ?? Settings.LLM, messages, settings, Read, Budget, cancellationToken).ConfigureAwait(false);
+        FactClaim[] claims = [.. ClaimsOf(verdict)];
 
-        List<FactClaim> claims = [];
-
-        foreach (FactClaim claim in ClaimsOf(verdict))
-        {
-            double? checkedTruth = _verify is null ? null : await _verify(claim.Text, cancellationToken).ConfigureAwait(false);
-            claims.Add(claim with { Truth = Math.Clamp(checkedTruth ?? claim.Truth, 0, 1) });
-        }
-
-        return Build(requested, verdict, claims);
+        return Build(requested, verdict, _verify is null ? claims : await VerifyAsync(claims, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>
@@ -101,37 +115,36 @@ public class ContentJudge
     /// который хранит вердикты, и тестам: они проверяют сборку оценки без обращения к модели.
     /// </summary>
     /// <param name="requested">Распознанное задание</param>
-    /// <param name="json">Ответ модели-судьи по схеме</param>
+    /// <param name="json">Ответ модели-судьи по схеме; ограда ```json и текст вокруг допускаются</param>
+    /// <exception cref="InvalidDataException">Ответ неполон: нет оценки хотя бы одного критерия</exception>
     public static ContentReview FromJson(Specifications requested, string json)
     {
-        Verdict verdict = Read(json);
+        Verdict verdict = JsonCall.Parse(json, Read)
+            ?? throw new InvalidDataException("Ответ судьи неполон или не по схеме: оценки нет.");
 
         return Build(requested, verdict, [.. ClaimsOf(verdict)]);
     }
 
     /// <summary>
-    /// Собирает оценку по ответу модели. Пункты и ограничения берутся в порядке заказа: пропущенный
-    /// судьей пункт получает общую полноту, пропущенное ограничение считается соблюденным, если
-    /// общая оценка выполнения указаний не ниже половины. Критерий, который к задаче не относится,
-    /// остается пустым.
+    /// Собирает оценку по ответу модели. Пункты и ограничения сопоставляются по номеру; номеров нет,
+    /// а число совпало, тогда по порядку. Пункт без оценки получает общую полноту, ограничение без
+    /// оценки считается соблюденным, если общая оценка выполнения указаний не ниже половины. Критерий,
+    /// который к задаче не относится, остается пустым.
     /// </summary>
     internal static ContentReview Build(Specifications requested, Verdict verdict, IReadOnlyList<FactClaim> claims)
     {
-        List<VerdictPoint> points = verdict.Points ?? [];
-        List<VerdictConstraint> constraints = verdict.Constraints ?? [];
+        string[] points = [.. requested.RequiredPoints.Take(Specifications.MaxItems)];
+        string[] constraints = [.. requested.Constraints.Take(Specifications.MaxItems)];
+        double overallCompleteness = Clamp(verdict.Completeness!.Value);
+        double overallInstruction = Clamp(verdict.InstructionFollowing!.Value);
 
-        List<PointCoverage> coverage =
-        [
-            .. requested.RequiredPoints.Select((point, i) =>
-                new PointCoverage(point, Clamp(i < points.Count ? points[i].Coverage : verdict.Completeness)))
-        ];
-        List<ConstraintCheck> checks =
-        [
-            .. requested.Constraints.Select((constraint, i) =>
-                new ConstraintCheck(constraint, i < constraints.Count ? constraints[i].Met : verdict.InstructionFollowing >= 0.5))
-        ];
+        double?[] covered = Match(points.Length, verdict.Points ?? [], item => item.Index, item => item.Coverage);
+        bool?[] met = Match(constraints.Length, verdict.Constraints ?? [], item => item.Index, item => item.Met);
 
-        double completeness = coverage.Count > 0 ? coverage.Average(item => item.Coverage) : Clamp(verdict.Completeness);
+        List<PointCoverage> coverage = [.. points.Select((point, i) => new PointCoverage(point, Clamp(covered[i] ?? overallCompleteness)))];
+        List<ConstraintCheck> checks = [.. constraints.Select((constraint, i) => new ConstraintCheck(constraint, met[i] ?? overallInstruction >= 0.5))];
+
+        double completeness = coverage.Count > 0 ? coverage.Average(item => item.Coverage) : overallCompleteness;
         double? instruction = checks.Count == 0 ? null : checks.Count(item => item.Met) / (double)checks.Count;
 
         return new(
@@ -139,42 +152,102 @@ public class ContentJudge
                 new(ContentReview.Factuality, ContentReview.FactualityOf(claims)),
                 new(ContentReview.Completeness, completeness),
                 new(ContentReview.InstructionFollowing, instruction),
-                new(ContentReview.Reasoning, Clamp(verdict.Reasoning)),
-                new(ContentReview.Expertise, Clamp(verdict.Expertise)),
-                new(ContentReview.StructureContent, Clamp(verdict.StructureContent)),
-                new(ContentReview.SourceQuality, requested.HasReferences ? Clamp(verdict.SourceQuality) : null),
-                new(ContentReview.FitForPurpose, Clamp(verdict.FitForPurpose)),
+                new(ContentReview.Reasoning, Clamp(verdict.Reasoning!.Value)),
+                new(ContentReview.Expertise, Clamp(verdict.Expertise!.Value)),
+                new(ContentReview.StructureContent, Clamp(verdict.StructureContent!.Value)),
+                new(ContentReview.SourceQuality, requested.HasReferences ? Clamp(verdict.SourceQuality!.Value) : null),
+                new(ContentReview.FitForPurpose, Clamp(verdict.FitForPurpose!.Value)),
             ],
             claims,
             [.. (verdict.Issues ?? []).Where(issue => !string.IsNullOrWhiteSpace(issue))],
             coverage,
             checks,
-            verdict.ExpertLevel is { } level ? Clamp(level) : null);
+            verdict.ExpertLevel is { } level && double.IsFinite(level) ? Clamp(level) : null);
+    }
+
+    // Проверка утверждений делегатом хоста разом. Сбой или нечисловой ответ на одном утверждении
+    // оставляет ему оценку судьи, а не теряет весь разбор
+    private async Task<FactClaim[]> VerifyAsync(FactClaim[] claims, CancellationToken cancellationToken)
+    {
+        double?[] checks = await Task.WhenAll(claims.Select(claim => CheckAsync(claim.Text, cancellationToken))).ConfigureAwait(false);
+
+        return [.. claims.Select((claim, i) => checks[i] is { } truth ? claim with { Truth = Clamp(truth) } : claim)];
+    }
+
+    private async Task<double?> CheckAsync(string claim, CancellationToken cancellationToken)
+    {
+        try
+        {
+            double? truth = await _verify!(claim, cancellationToken).ConfigureAwait(false);
+
+            return truth is { } value && double.IsFinite(value) ? value : null;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
     }
 
     private static double Clamp(double value) => Math.Clamp(value, 0, 1);
 
-    private static Verdict Read(string json) => JsonSerializer.Deserialize<Verdict>(json, JsonOptions) ?? new Verdict();
-
-    private static IEnumerable<FactClaim> ClaimsOf(Verdict verdict) =>
-        (verdict.Claims ?? [])
-            .Where(item => !string.IsNullOrWhiteSpace(item.Text))
-            .Take(MaxClaims)
-            .Select(item => new FactClaim(item.Text!.Trim(), Clamp(item.Truth)));
-
-    private static string UserMessage(string task, Specifications requested, string answer)
+    // Вердикт без оценки хотя бы одного критерия или с нечисловой оценкой негоден: пропуск это не
+    // единица и не ноль, а сбой судьи
+    private static Verdict? Read(string json)
     {
-        string points = requested.RequiredPoints.Count == 0 ? "не выделены" : Numbered(requested.RequiredPoints);
-        string constraints = requested.Constraints.Count == 0 ? "нет" : Numbered(requested.Constraints);
-        string clipped = answer.Length <= AnswerChars ? answer : answer[..AnswerChars] + "\n[…ответ обрезан для судьи]";
+        Verdict? verdict = JsonSerializer.Deserialize<Verdict>(json, JsonOptions);
+        double?[] required =
+        [
+            verdict?.Completeness, verdict?.InstructionFollowing, verdict?.Reasoning, verdict?.Expertise,
+            verdict?.StructureContent, verdict?.SourceQuality, verdict?.FitForPurpose
+        ];
 
-        return $"ЗАДАНИЕ:\n{task}\n\nСМЫСЛОВЫЕ ПУНКТЫ: {points}\n\nОГРАНИЧЕНИЯ: {constraints}\n\n"
-            + $"ЭКСПЕРТНОСТЬ ЗАДАНИЯ: {requested.ExpertLevel:0.00}\n\n"
-            + $"НУЖНЫ ИСТОЧНИКИ: {(requested.HasReferences ? "да" : "нет")}\n\nОТВЕТ:\n{clipped}";
+        return required.All(score => score is { } value && double.IsFinite(value)) ? verdict : null;
     }
 
-    private static string Numbered(IReadOnlyList<string> items) =>
-        "\n" + string.Join("\n", items.Select((item, i) => $"{i + 1}. {item}"));
+    // Утверждения без вероятности или с нечисловой вероятностью отбрасываются: ноль по умолчанию
+    // объявлял бы их ложными
+    private static IEnumerable<FactClaim> ClaimsOf(Verdict verdict) =>
+        (verdict.Claims ?? [])
+            .Where(item => !string.IsNullOrWhiteSpace(item.Text) && item.Truth is { } truth && double.IsFinite(truth))
+            .Take(MaxClaims)
+            .Select(item => new FactClaim(item.Text!.Trim(), Clamp(item.Truth!.Value)));
+
+    // Оценки судьи по номерам пунктов заказа. Номера есть у всех, тогда по номерам; номеров нет, а
+    // число совпало, тогда по порядку (прежний вид ответа); иначе сопоставить нельзя, и пункт
+    // получает общую оценку
+    private static T?[] Match<TItem, T>(int count, IReadOnlyList<TItem> judged, Func<TItem, int?> number, Func<TItem, T?> value)
+        where T : struct
+    {
+        T?[] matched = new T?[count];
+        bool numbered = judged.Count > 0 && judged.All(item => number(item) is not null);
+
+        for (int i = 0; i < judged.Count; i++)
+        {
+            int slot = numbered ? number(judged[i])!.Value - 1 : judged.Count == count ? i : -1;
+
+            if (slot >= 0 && slot < count && matched[slot] is null)
+                matched[slot] = value(judged[i]) is { } item && (item is not double score || double.IsFinite(score)) ? item : null;
+        }
+
+        return matched;
+    }
+
+    private static string UserMessage(string tag, string task, Specifications requested, string answer)
+    {
+        string points = Numbered(requested.RequiredPoints, "не выделены");
+        string constraints = Numbered(requested.Constraints, "нет");
+        int limit = Math.Clamp((int)Math.Min(requested.SymbolLength * 1.25, MaxAnswerChars), AnswerChars, MaxAnswerChars);
+
+        return $"{PromptData.Wrap(tag, "задание", task)}\n\n"
+            + $"{PromptData.Wrap(tag, "смысловые пункты", points)}\n\n"
+            + $"{PromptData.Wrap(tag, "ограничения", constraints)}\n\n"
+            + $"ЭКСПЕРТНОСТЬ ЗАДАНИЯ: {requested.ExpertLevel.ToString("0.00", CultureInfo.InvariantCulture)}\n\n"
+            + $"НУЖНЫ ИСТОЧНИКИ: {(requested.HasReferences ? "да" : "нет")}\n\n"
+            + PromptData.Wrap(tag, "ответ", PromptData.Clip(answer, limit));
+    }
+
+    private static string Numbered(IReadOnlyList<string> items, string empty) =>
+        items.Count == 0 ? empty : string.Join("\n", items.Take(Specifications.MaxItems).Select((item, i) => $"{i + 1}. {item}"));
 
     private static string BuildSchema()
     {
@@ -186,7 +259,7 @@ public class ContentJudge
                 claims = new
                 {
                     type = "array",
-                    description = "До 12 атомарных проверяемых утверждений ответа",
+                    description = $"До {MaxClaims} атомарных проверяемых утверждений ответа",
                     items = new
                     {
                         type = "object",
@@ -208,10 +281,11 @@ public class ContentJudge
                         type = "object",
                         properties = new
                         {
+                            index = new { type = "integer", description = "Номер пункта в задании" },
                             point = new { type = "string", description = "Пункт задания" },
                             coverage = new { type = "number", minimum = 0, maximum = 1, description = "Насколько раскрыт" }
                         },
-                        required = new[] { "point", "coverage" },
+                        required = new[] { "index", "point", "coverage" },
                         additionalProperties = false
                     }
                 },
@@ -224,10 +298,11 @@ public class ContentJudge
                         type = "object",
                         properties = new
                         {
+                            index = new { type = "integer", description = "Номер ограничения в задании" },
                             constraint = new { type = "string", description = "Ограничение задания" },
                             met = new { type = "boolean", description = "Соблюдено ли" }
                         },
-                        required = new[] { "constraint", "met" },
+                        required = new[] { "index", "constraint", "met" },
                         additionalProperties = false
                     }
                 },
@@ -254,20 +329,20 @@ public class ContentJudge
 
     private static object Criterion(string description) => new { type = "number", minimum = 0, maximum = 1, description };
 
-    /// <summary>Ответ модели по схеме</summary>
+    /// <summary>Ответ модели по схеме; пропущенное поле остается пустым, а не получает оценку</summary>
     internal sealed class Verdict
     {
         public List<VerdictClaim>? Claims { get; set; }
         public List<VerdictPoint>? Points { get; set; }
         public List<VerdictConstraint>? Constraints { get; set; }
         public double? ExpertLevel { get; set; }
-        public double Completeness { get; set; } = 1;
-        public double InstructionFollowing { get; set; } = 1;
-        public double Reasoning { get; set; } = 1;
-        public double Expertise { get; set; } = 1;
-        public double StructureContent { get; set; } = 1;
-        public double SourceQuality { get; set; } = 1;
-        public double FitForPurpose { get; set; } = 1;
+        public double? Completeness { get; set; }
+        public double? InstructionFollowing { get; set; }
+        public double? Reasoning { get; set; }
+        public double? Expertise { get; set; }
+        public double? StructureContent { get; set; }
+        public double? SourceQuality { get; set; }
+        public double? FitForPurpose { get; set; }
         public List<string>? Issues { get; set; }
     }
 
@@ -278,27 +353,33 @@ public class ContentJudge
         public string? Text { get; set; }
 
         [JsonPropertyName("truth")]
-        public double Truth { get; set; }
+        public double? Truth { get; set; }
     }
 
     /// <summary>Раскрытие пункта в ответе модели</summary>
     internal sealed class VerdictPoint
     {
+        [JsonPropertyName("index")]
+        public int? Index { get; set; }
+
         [JsonPropertyName("point")]
         public string? Point { get; set; }
 
         [JsonPropertyName("coverage")]
-        public double Coverage { get; set; }
+        public double? Coverage { get; set; }
     }
 
     /// <summary>Соблюдение ограничения в ответе модели</summary>
     internal sealed class VerdictConstraint
     {
+        [JsonPropertyName("index")]
+        public int? Index { get; set; }
+
         [JsonPropertyName("constraint")]
         public string? Constraint { get; set; }
 
         [JsonPropertyName("met")]
-        public bool Met { get; set; }
+        public bool? Met { get; set; }
     }
 }
 
@@ -309,12 +390,12 @@ public class ContentJudge
 internal static class ContentCriteriaDescriptions
 {
     public const string Points =
-        "По каждому смысловому пункту задания в том же порядке: насколько он раскрыт, 0-1. 1 - "
+        "По каждому смысловому пункту задания с его номером: насколько он раскрыт, 0-1. 1 - "
         + "раскрыт по сути; 0.5 - упомянут без раскрытия; 0 - отсутствует или раскрыт неверно. "
         + "Пусто, если пунктов нет.";
 
     public const string Constraints =
-        "По каждому ограничению задания в том же порядке: соблюдено ли оно. Пусто, если ограничений нет.";
+        "По каждому ограничению задания с его номером: соблюдено ли оно. Пусто, если ограничений нет.";
 
     public const string ExpertLevel =
         "Уровень экспертности самого ответа, 0-1, по той же шкале, что экспертность задания: 0.1 - "
@@ -335,7 +416,7 @@ internal static class ContentCriteriaDescriptions
     public const string Expertise =
         "Глубина, которой ждет специалист области, 0-1. 0.2 - общие слова, подошедшие бы к любой "
         + "задаче; 0.5 - грамотно, но поверхностно; 0.8 - конкретика, термины и нюансы по делу; "
-        + "1 - уровень опытного профессионала.";
+        + "1 - уровень опытного профессионала. Объем глубиной не считается.";
 
     public const string StructureContent =
         "Содержательность структуры, 0-1: таблицы, списки и разделы наполнены данными по делу. "

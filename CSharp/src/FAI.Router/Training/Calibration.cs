@@ -23,6 +23,12 @@ public readonly record struct Calibration(double A, double B)
     /// <summary>Шаг, меньше которого решение считается найденным.</summary>
     private const double Tolerance = 1e-10;
 
+    /// <summary>Наибольшая длина шага Ньютона: прогноз и сдвиг живут на шкале единиц</summary>
+    private const double MaxStep = 10;
+
+    /// <summary>Сколько раз шаг можно уменьшить вдвое, прежде чем принять его как есть</summary>
+    private const int MaxHalvings = 30;
+
     /// <summary>
     /// Слабая привязка сдвига к доле лайков. Когда все оценки одинаковые, у сдвига нет конечного
     /// оптимума, и без привязки он уходил бы в бесконечность.
@@ -80,19 +86,48 @@ public readonly record struct Calibration(double A, double B)
             }
 
             double det = hAA * hBB - hAB * hAB;
-            if (det < 1e-18)
+            if (!(det >= 1e-18))
                 break;
 
             double dA = (hBB * gA - hAB * gB) / det;
             double dB = (hAA * gB - hAB * gA) / det;
-            a -= dA;
-            b -= dB;
 
-            if (Math.Abs(dA) < Tolerance && Math.Abs(dB) < Tolerance)
+            if (!double.IsFinite(dA) || !double.IsFinite(dB))
+                break;
+
+            // Шаг ограничен и уменьшается вдвое, пока не снизит цель: на выбросах и почти
+            // разделимых выборках полный шаг Ньютона перескакивал минимум и уходил в бесконечность
+            double norm = Math.Sqrt(dA * dA + dB * dB);
+            double scale = norm > MaxStep ? MaxStep / norm : 1;
+            double current = Objective(pairs, a, b, ridge, anchor);
+
+            for (int halving = 0; halving < MaxHalvings && Objective(pairs, a - scale * dA, b - scale * dB, ridge, anchor) > current + 1e-12; halving++)
+                scale /= 2;
+
+            a -= scale * dA;
+            b -= scale * dB;
+
+            if (Math.Abs(scale * dA) < Tolerance && Math.Abs(scale * dB) < Tolerance)
                 break;
         }
 
-        return new Calibration(a, b);
+        return double.IsFinite(a) && double.IsFinite(b) ? new Calibration(a, b) : new Calibration(0, anchor);
+    }
+
+    // Цель подгонки: логистическая ошибка плюс стягивание наклона к нулю и сдвига к доле лайков
+    private static double Objective(IReadOnlyList<(double Quality, double Score)> pairs, double a, double b, double ridge, double anchor)
+    {
+        double sum = 0.5 * ridge * a * a + 0.5 * ShiftRidge * (b - anchor) * (b - anchor);
+
+        foreach ((double q, double y) in pairs)
+        {
+            double z = Math.Clamp(a * q + b, -35, 35);
+
+            // log(1 + e^z) без переполнения
+            sum += Math.Max(z, 0) + Math.Log(1 + Math.Exp(-Math.Abs(z))) - y * z;
+        }
+
+        return sum;
     }
 
     // Показатель ограничен: на краях экспонента иначе дает бесконечность и NaN в производной

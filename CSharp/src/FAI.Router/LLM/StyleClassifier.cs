@@ -1,8 +1,7 @@
 using System.Text.Json;
-using AI.LLM.Services.LLM;
 using System.Text.Json.Serialization;
 using AI.LLM.Core.Models.Common.Messages;
-using AI.LLM.Core.Models.Common.Requests;
+using AI.LLM.Services.LLM;
 using FAI.Router.Enums;
 
 namespace FAI.Router.LLM;
@@ -11,6 +10,12 @@ namespace FAI.Router.LLM;
 /// Смысловая оценка текста моделью: стиль и лексические метрики,
 /// то есть все, что не считается по разметке (через OpenRouter)
 /// </summary>
+/// <remarks>
+/// Отдельное от судьи содержания обращение оставлено намеренно: стиль и предмет ответа модель
+/// оценивает по одному ответу, не видя задания. Судья видит задание, и в общем вызове предмет
+/// ответа списывался бы с предмета задания, а сверка «ответ о том же, о чем задание» потеряла бы
+/// смысл. Ответ обрезается тем же пределом, что у судьи: прежде уходил целиком (бывало 62 925 знаков).
+/// </remarks>
 public class StyleClassifier
 {
     /// <summary>
@@ -21,14 +26,19 @@ public class StyleClassifier
         "формальность тона, предметную область, область науки и тип результата (что это за текст), верни результат " +
         "строго в виде JSON по заданной схеме, без пояснений.";
 
-    private readonly string _schemaJson = BuildSchema();
-    private readonly LLMBase? _llm;
+    private static readonly string SchemaJson = BuildSchema();
 
+    // Число вместо имени значения не принимается: styleType 42 выходил за границы перечисления
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) }
     };
+
+    private readonly LLMBase? _llm;
+
+    /// <summary>Бюджет времени на оценку, все попытки вместе</summary>
+    public TimeSpan Budget { get; init; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Смысловая оценка текста моделью
@@ -45,25 +55,31 @@ public class StyleClassifier
     /// </summary>
     /// <param name="text">Текст для оценки</param>
     /// <param name="cancellationToken">Токен отмены</param>
+    /// <exception cref="InvalidDataException">Модель дважды ответила не по схеме</exception>
     public async Task<StyleAssessment> AssessAsync(string text, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Текст для оценки не может быть пустым.", nameof(text));
 
-        GenerateSettings settings = new(temperature: 0)
-        {
-            ResponseFormat = ResponseFormat.CreateJsonSchema("style_assessment", _schemaJson)
-        };
-
+        string tag = PromptData.NewTag();
         List<LLMMessage> messages =
         [
-            new LLMMessage(LLMMessage.SystemRole, SystemPrompt),
-            new LLMMessage(LLMMessage.UserRole, text)
+            new LLMMessage(LLMMessage.SystemRole, SystemPrompt + " " + PromptData.Rule(tag)),
+            new LLMMessage(LLMMessage.UserRole, PromptData.Wrap(tag, "текст", PromptData.Clip(text, ContentJudge.AnswerChars)))
         ];
 
-        string response = await (_llm ?? Settings.LLM).SendToLLM(messages, settings, cancellationToken).ConfigureAwait(false);
-        return JsonSerializer.Deserialize<StyleAssessment>(response, JsonOptions) ?? new StyleAssessment();
+        return await JsonCall.AskAsync(_llm ?? Settings.LLM, messages, JsonCall.Settings("style_assessment", SchemaJson),
+            Read, Budget, cancellationToken).ConfigureAwait(false);
     }
+
+    // Значение вне перечисления негодно: оно вышло бы за границы кода «один из многих»
+    private static StyleAssessment? Read(string json) =>
+        JsonSerializer.Deserialize<StyleAssessment>(json, JsonOptions) is { } assessment
+        && Enum.IsDefined(assessment.StyleType) && Enum.IsDefined(assessment.Domain)
+        && Enum.IsDefined(assessment.ScienceField) && Enum.IsDefined(assessment.TaskKind)
+        && double.IsFinite(assessment.TermDensity) && double.IsFinite(assessment.FormalityScore)
+            ? assessment
+            : null;
 
     // Схема ответа: имена полей совпадают со свойствами Specifications,
     // список стилей берется из Style, чтобы не расходиться с перечислением

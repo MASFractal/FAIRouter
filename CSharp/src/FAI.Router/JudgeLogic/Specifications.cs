@@ -28,6 +28,20 @@ public class Specifications
     /// <summary>Разрядов под язык: по одному на язык из списка и один на прочие.</summary>
     public static int LanguageDim => LanguageCodes.Length + 1;
 
+    /// <summary>Сколько смысловых пунктов и ограничений берется из заказа: больше удорожает суд и размывает разбор</summary>
+    public const int MaxItems = 12;
+
+    /// <summary>
+    /// Поля формы, которые запрос может задать явно, именами в схеме ответа модели. Остальные поля
+    /// (область, область науки, тип задачи) описывают предмет задачи и сверяются всегда.
+    /// </summary>
+    public static readonly string[] StatableFields =
+    [
+        "styleType", "symbolLength", "wordLength", "paragraphCount", "sectionCount", "listItemCount",
+        "tableCount", "codeBlockCount", "formulaCount", "headingDepth", "avgSentenceLength",
+        "readabilityScore", "termDensity", "formalityScore", "language", "hasReferences", "programmingLanguage"
+    ];
+
     // Доли приходят от модели, а она границы схемы соблюдает не всегда: DeepSeek возвращал
     // termDensity 4 и 80 при объявленных 0-1. Такое значение забивает норму вектора целиком,
     // поэтому границу держит сам тип, а не только схема ответа.
@@ -100,7 +114,7 @@ public class Specifications
     public double AvgSentenceLength { get; set; }
 
     /// <summary>
-    /// Читаемость текста (индекс Флеша-Кинкейда или аналог), 0-100
+    /// Читаемость текста, 0-100, чем выше, тем легче: индекс Флеша (Reading Ease) для английского, его адаптация Оборневой для русского
     /// </summary>
     public double ReadabilityScore
     {
@@ -206,6 +220,14 @@ public class Specifications
     /// </summary>
     public List<string> Constraints { get; set; } = [];
 
+    /// <summary>
+    /// Поля формы, которые запрос задал явно, именами из <see cref="StatableFields"/>. Остальные
+    /// модель угадала разумным ожиданием, и критик их не сверяет: угаданное требование не
+    /// требование. Пусто (null) значит неизвестно: заказ собран кодом или распознан прежней
+    /// версией, тогда все поля считаются заданными явно.
+    /// </summary>
+    public List<string>? ExplicitFields { get; set; }
+
     #endregion
 
     /// <summary>
@@ -220,18 +242,40 @@ public class Specifications
     public Vector FeaturesSpecificationVector => GetVector();
 
     /// <summary>
+    /// Задано ли поле явно: да, если оно в <see cref="ExplicitFields"/> или список неизвестен
+    /// </summary>
+    /// <param name="field">Имя поля из <see cref="StatableFields"/></param>
+    public bool IsExplicit(string field) =>
+        ExplicitFields is null || ExplicitFields.Contains(field, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Разряд языка в векторе: по списку <see cref="LanguageCodes"/>, последний для прочих,
     /// минус единица для неизвестного
     /// </summary>
-    /// <param name="code">Код языка ISO 639-1</param>
+    /// <param name="code">Код языка ISO 639-1, можно с регионом (ru-RU) и в любом регистре</param>
     public static int LanguageSlot(string? code)
     {
-        if (string.IsNullOrWhiteSpace(code))
+        if (NormalizeLanguage(code) is not { } normalized)
             return -1;
 
-        int index = Array.IndexOf(LanguageCodes, code.Trim().ToLowerInvariant());
+        int index = Array.IndexOf(LanguageCodes, normalized);
 
         return index >= 0 ? index : LanguageCodes.Length;
+    }
+
+    /// <summary>
+    /// Код языка без региона и в нижнем регистре: RU, ru-RU и ru_RU дают ru. Пусто, если языка нет.
+    /// </summary>
+    /// <param name="code">Код языка от модели или замера</param>
+    public static string? NormalizeLanguage(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return null;
+
+        string trimmed = code.Trim();
+        int region = trimmed.IndexOfAny(['-', '_']);
+
+        return (region > 0 ? trimmed[..region] : trimmed).ToLowerInvariant();
     }
 
     // Формирования вектора признаков
@@ -286,7 +330,12 @@ public class Specifications
     private static Vector OneHot<TEnum>(TEnum value) where TEnum : struct, Enum
     {
         Vector vector = new(Enum.GetValues<TEnum>().Length);
-        vector[Convert.ToInt32(value)] = 1;
+        int index = Convert.ToInt32(value);
+
+        // Значение вне перечисления (число от модели) не роняет вектор и не светит ничем
+        if (index >= 0 && index < vector.Count)
+            vector[index] = 1;
+
         return vector;
     }
 
@@ -298,7 +347,7 @@ public class Specifications
         Vector vector = new(Enum.GetValues<TEnum>().Length - 1);
         int index = Convert.ToInt32(value) - 1;
 
-        if (index >= 0)
+        if (index >= 0 && index < vector.Count)
             vector[index] = 1;
 
         return vector;

@@ -38,7 +38,9 @@ class InputFeatures:
         (трудность, экспертность, ограничения, опора на факты, длина диалога) входят здесь, а не в
         вектор спецификации: у готового ответа их нет, и судья формы видел бы в них расхождение."""
         spec = self.input_specifications
-        head = np.array([
+        # Разрядов задачи может быть больше семи (Settings.FEATURES_DIM): лишние остаются нулями
+        head = np.zeros(Settings.FEATURES_DIM)
+        head[:Settings.BASE_FEATURES_DIM] = [
             Specifications.scaled(self.input_len, self.INPUT_SCALE),
             Specifications.scaled(self.len_answer, self.ANSWER_SCALE),
             Specifications.scaled(self.turn_count - 1, self.TURN_SCALE),
@@ -46,7 +48,7 @@ class InputFeatures:
             spec.expert_level,
             spec.difficulty,
             spec.factuality_demand,
-        ])
+        ]
         vector = np.concatenate([head, self.input_specifications.feature_vector()])
         norm = np.linalg.norm(vector)
         return vector if norm < 1e-12 else vector / norm
@@ -62,9 +64,16 @@ class Tracert:
     # Заказанная спецификация, распознанная при построении признаков. Судье она нужна
     # для оценки хода, без нее пришлось бы обращаться к модели повторно
     requested_spec: Specifications | None = None
-    # Ход отдан не лидеру, а сопернику. Без пометки при разборе накопленного нельзя
-    # отличить осознанный выбор роутера от жребия
+    # Ход отдан не лидеру по метрике: ради разведки или потому, что лидер отказал и работу взял
+    # запасной. Без пометки при разборе накопленного нельзя отличить осознанный выбор от жребия
     is_exploration: bool = False
+    # Прогноз качества победителя в момент выбора. По нему калибруется планка: прогноз при нынешних
+    # весах уже видел отзыв на этот ход и обещал бы больше, чем знает
+    forecast: float | None = None
+    # Кандидаты, отказавшие на этом ходе (ошибка, таймаут, пустой ответ), по порядку попыток
+    failed: list[str] = field(default_factory=list)
+    # Объем хода не вошел ни в одного кандидата: ход отдан тому, у кого предел больше
+    context_shortfall: bool = False
     # Баллы за задачу. Проставляет судья после того, как победитель ответил
     score: float = 0.0
     # Выбор шел с планкой достаточности: истина, если кто-то до нее дотянул, ложь, если ход

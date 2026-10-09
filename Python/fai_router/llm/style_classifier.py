@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 
 from fai_router.enums import Domain, ScienceField, Style, TaskKind
-from fai_router.llm import field_descriptions
-from fai_router.llm.client import OpenRouterClient
+from fai_router.llm import field_descriptions, json_call, prompt_data
 from fai_router.settings import Settings
+from fai_router.specifications import enum_value
+
+# Сколько знаков текста видит оценщик: тот же предел, что у судьи содержания. Прежде текст уходил
+# целиком (бывало 62 925 знаков)
+TEXT_CHARS = 24_000
 
 
 @dataclass(frozen=True)
@@ -23,13 +28,20 @@ class StyleAssessment:
 
 class StyleClassifier:
     """Смысловая оценка текста моделью: стиль и лексические метрики, то есть все, что не
-    считается по разметке."""
+    считается по разметке.
+
+    Отдельное от судьи содержания обращение оставлено намеренно: стиль и предмет ответа модель
+    оценивает по одному ответу, не видя задания. Судья видит задание, и в общем вызове предмет ответа
+    списывался бы с предмета задания, а сверка «ответ о том же, о чем задание» потеряла бы смысл."""
 
     SYSTEM_PROMPT = (
         "Ты оцениваешь стиль, лексику и предмет присланного текста. Определи стиль, долю терминологии, "
         "формальность тона, предметную область, область науки и тип результата (что это за текст), верни результат "
         "строго в виде JSON по заданной схеме, без пояснений."
     )
+
+    # Бюджет времени на оценку, все попытки вместе
+    BUDGET = 120.0
 
     SCHEMA = {
         "type": "object",
@@ -51,32 +63,38 @@ class StyleClassifier:
         "additionalProperties": False,
     }
 
-    def __init__(self, llm: OpenRouterClient | None = None):
+    def __init__(self, llm=None, budget: float = BUDGET):
         # Свой клиент нужен, когда в одном процессе судят несколько моделей
         self._llm = llm
+        self.budget = budget
 
     def assess(self, text: str) -> StyleAssessment:
         if not text or not text.strip():
             raise ValueError("Текст для оценки не может быть пустым.")
-        client = self._llm or Settings.require_llm()
-        raw = client.complete(
-            [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": text}],
-            schema=self.SCHEMA, schema_name="style_assessment",
-        )
-        data = json.loads(raw)
-        return StyleAssessment(
-            style_type=_enum_of(Style, data.get("styleType"), Style.OTHER),
-            term_density=float(data.get("termDensity", 0.0)),
-            formality_score=float(data.get("formalityScore", 0.0)),
-            domain=_enum_of(Domain, data.get("domain"), Domain.GENERAL),
-            science_field=_enum_of(ScienceField, data.get("scienceField"), ScienceField.NONE),
-            task_kind=_enum_of(TaskKind, data.get("taskKind"), TaskKind.NONE),
-        )
+        tag = prompt_data.new_tag()
+        messages = [{"role": "system", "content": self.SYSTEM_PROMPT + " " + prompt_data.rule(tag)},
+                    {"role": "user", "content": prompt_data.wrap(tag, "текст", prompt_data.clip(text, TEXT_CHARS))}]
+        return json_call.ask(self._llm or Settings.require_llm(), messages, "style_assessment",
+                             self.SCHEMA, read, self.budget)
 
 
-def _enum_of(enum_cls, value, fallback):
-    """Значение перечисления по ответу модели; незнакомое значение дает запасное."""
-    try:
-        return enum_cls(value)
-    except ValueError:
-        return fallback
+def read(raw: str) -> StyleAssessment | None:
+    """Разбор ответа: значение вне перечисления (и число вместо имени) негодно, оно вышло бы за
+    границы кода «один из многих»; пропущенное поле остается по умолчанию."""
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return None
+    defaults = StyleAssessment()
+    fields = {}
+    for key, name, enum_cls in (("styleType", "style_type", Style), ("domain", "domain", Domain),
+                                ("scienceField", "science_field", ScienceField), ("taskKind", "task_kind", TaskKind)):
+        value = enum_value(enum_cls, data[key]) if key in data else getattr(defaults, name)
+        if value is None:
+            return None
+        fields[name] = value
+    for key, name in (("termDensity", "term_density"), ("formalityScore", "formality_score")):
+        value = data.get(key, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return None
+        fields[name] = float(value)
+    return StyleAssessment(**fields)

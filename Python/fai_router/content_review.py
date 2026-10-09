@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 FACTUALITY = "Фактология"
@@ -20,8 +21,13 @@ STRUCTURE_CONTENT = "Наполнение структуры"
 SOURCE_QUALITY = "Качество источников"
 FIT_FOR_PURPOSE = "Пригодность для дела"
 
-# Оценка, ниже которой критерий считается проваленным
-PASS_MARK = 0.6
+# Отклонение, начиная с которого пункт критика считается проваленным
+MISMATCH_THRESHOLD = 0.2
+
+# Оценка, ниже которой критерий, пункт или утверждение считаются проваленными: тот же порог, что у
+# критика (DiffSpec.PASS_MARK). Прежде отчет содержания брал 0,6, а критик 0,8, и один и тот же
+# критерий в одном отчете был провален, а в другом нет
+PASS_MARK = 1.0 - MISMATCH_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -73,7 +79,7 @@ class ContentReview:
     @property
     def score(self) -> float:
         """Среднее по критериям, которые относятся к задаче."""
-        scores = [item.score for item in self.criteria if item.score is not None]
+        scores = [item.score for item in self.criteria if item.score is not None and math.isfinite(item.score)]
         return sum(scores) / len(scores) if scores else 1.0
 
     def get(self, name: str) -> float | None:
@@ -81,16 +87,17 @@ class ContentReview:
 
     @staticmethod
     def factuality_of(claims: list[FactClaim]) -> float | None:
-        """Средняя вероятность истинности; утверждений нет, значит None."""
-        if not claims:
+        """Средняя вероятность истинности; утверждений с числом нет, значит None."""
+        truths = [claim.truth for claim in claims if math.isfinite(claim.truth)]
+        if not truths:
             return None
-        return sum(min(max(claim.truth, 0.0), 1.0) for claim in claims) / len(claims)
+        return sum(min(max(truth, 0.0), 1.0) for truth in truths) / len(truths)
 
     def __str__(self) -> str:
         lines = [f"Содержание {self.score:.2f}"]
         lines += [f"  {item.name}: {item.score:.2f}" for item in self.criteria
                   if item.score is not None and item.score < PASS_MARK]
         lines += [f"  Сомнительное утверждение ({claim.truth:.2f}): {claim.text}"
-                  for claim in self.claims if claim.truth < 0.5]
+                  for claim in self.claims if claim.truth < PASS_MARK]
         lines += [f"  - {issue}" for issue in self.issues]
         return "\n".join(lines)

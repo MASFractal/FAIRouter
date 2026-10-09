@@ -101,8 +101,12 @@ def test_capability_filter_precedes_ranking():
     assert [item[1] for item in kept] == [coder]
 
     small = element("короткий контекст", shared, context_limit=500)
-    assert env.get_top_k(task(symbols=1500), [small]) == []
-    assert len(env.get_top_k(task(symbols=300), [small])) == 1
+    roomy = element("длинный ответ", shared, context_limit=5000)
+    assert [item[1] for item in env.get_top_k(task(symbols=1500), [small, roomy])] == [roomy]
+    # Объем не вошел ни в кого: ход отдан тому, у кого предел больше, и недобор помечен
+    assert [item[1] for item in env.get_top_k(task(symbols=1500), [small])] == [small]
+    assert env.choose(task(symbols=1500), [small]).context_shortfall
+    assert not env.choose(task(symbols=300), [small]).context_shortfall
 
     seeing = element("зрячий", shared, capabilities=Capability.ALL)
     blind = element("слепой", shared, capabilities=Capability.CODE)

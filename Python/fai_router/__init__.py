@@ -9,6 +9,7 @@ from fai_router.judge import Judge
 from fai_router.routed_element import RoutedElement
 from fai_router.tracking import Feedback, InputFeatures, Tracert
 from fai_router import env
+from fai_router.memory import TrainingLoss
 from fai_router.router import Completion, FaiRouter, RouterAnswer
 
 __all__ = [
@@ -16,5 +17,5 @@ __all__ = [
     "RouteWeights", "Settings", "SufficiencyBar", "Specifications",
     "DiffSpec", "SpecDeviation", "ContentReview", "ContentCriterion", "FactClaim", "PointCoverage", "ConstraintCheck", "Judge", "RoutedElement",
     "Feedback", "InputFeatures", "Tracert", "env",
-    "FaiRouter", "RouterAnswer", "Completion",
+    "FaiRouter", "RouterAnswer", "Completion", "TrainingLoss",
 ]

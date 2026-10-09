@@ -56,21 +56,38 @@ def test_sufficient_pays_for_no_extra_quality():
 
 
 def test_unreachable_bar_gives_the_strongest():
-    """Не дотянул никто: отдается сильнейший, а решать, что сказать человеку, вызывающему."""
+    """Не дотянул никто: первым идет сильнейший по вероятности достаточности, а решать, что сказать
+    человеку, вызывающему."""
     features, candidates = scene()
     chosen = env.get_sufficient(features, candidates, bar(0.99), weights=QUALITY_FIRST)
     assert not chosen.reached
     assert chosen.top[0][1].name == "сильная"
 
 
-def test_newcomer_gets_the_average_not_its_own_forecast():
-    """Незнакомому кандидату калибровке верить рано: он получает долю лайков по всем ходам."""
+def test_newcomer_gets_its_forecast_shrunk_to_the_average():
+    """Незнакомому кандидату калибровке верить рано: его прогноз весит одну оценку
+    (forecast_strength), доля лайков пять. Сильный новичок поэтому выше среднего, но планку 0,7 не
+    проходит, пока не наберет опыта."""
     features, candidates = scene()
     newcomer = element(features, "новичок", 0.95, 0.01, experience=0)
-    assert bar(0.7).sufficiency(newcomer.experience, 0.95) == pytest.approx(0.5)
+    calibrated = Calibration(10.0, -5.0).predict(0.95)
+    assert bar(0.7).sufficiency(newcomer.experience, 0.95) == pytest.approx((calibrated + 5 * 0.5) / 6)
+    assert bar(0.7).sufficiency(0, 0.95) > bar(0.7).sufficiency(0, 0.2)
 
     chosen = env.get_sufficient(features, [*candidates, newcomer], bar(0.7), weights=QUALITY_FIRST)
     assert "новичок" not in [candidate.name for _, candidate in chosen.top]
+
+    # Без собственного веса прогноза новички неразличимы: так было до 09.10.2026
+    flat = SufficiencyBar(0.7, Calibration(10.0, -5.0), prior_rate=0.5, forecast_strength=0)
+    assert flat.sufficiency(0, 0.95) == pytest.approx(flat.sufficiency(0, 0.2)) == pytest.approx(0.5)
+
+
+def test_calibration_stays_finite_on_separable_data():
+    """Разделимая выборка с выбросами по шкале: полный шаг Ньютона уходил бы в бесконечность."""
+    pairs = [(-50.0 + i if i < 20 else 50.0 + i, 0.0 if i < 20 else 1.0) for i in range(40)]
+    fitted = Calibration.fit(pairs, ridge=1e-6)
+    assert np.isfinite(fitted.A) and np.isfinite(fitted.B)
+    assert fitted.predict(80) > fitted.predict(-40)
 
 
 def test_cost_ratio_raises_cost_but_not_list_price():
