@@ -47,6 +47,46 @@ public class TrainingTests(ITestOutputHelper output)
         Assert.True(winner.GetQualityScore(features.FeatureVector) < 0.6);
     }
 
+    /// <summary>Причина по содержанию штрафует модель, выдуманные факты сильнее ошибок</summary>
+    [Fact]
+    public void Made_up_facts_penalize_harder_than_errors()
+    {
+        var features = Features();
+        double errors = DislikedQuality(features, FeedbackReason.Errors);
+        double madeUp = DislikedQuality(features, FeedbackReason.MadeUp);
+
+        Assert.True(errors < 0.6);
+        Assert.True(madeUp < errors);
+        Assert.Equal(DislikedQuality(features, FeedbackReason.None), DislikedQuality(features, FeedbackReason.OffTopic), 12);
+    }
+
+    /// <summary>Претензия только к объему и стилю это вкус человека: прогноз качества модели не меняется</summary>
+    [Fact]
+    public void Form_only_dislike_keeps_the_quality()
+    {
+        var features = Features();
+
+        Assert.Equal(0.6, DislikedQuality(features, FeedbackReason.TooLong | FeedbackReason.Style), 12);
+        Assert.Equal(DislikedQuality(features, FeedbackReason.Errors), DislikedQuality(features, FeedbackReason.Errors | FeedbackReason.TooShort), 12);
+        Assert.Equal(0, Feedback.QualityWeight(FeedbackReason.Form));
+        Assert.Equal(1, Feedback.QualityWeight(FeedbackReason.None));
+    }
+
+    /// <summary>Штраф ложится на задачи такого вида: на похожей задаче прогноз падает сильнее, чем на другой</summary>
+    [Fact]
+    public void Penalty_stays_with_tasks_of_that_kind()
+    {
+        var rated = Features("Напиши функцию на C#, которая сортирует список заказов по дате.");
+        var other = Features("Сочини короткое поздравление коллеге с днем рождения в стихах.");
+        var winner = Element(rated, "победитель", 0.6, 1);
+        double ratedBefore = winner.GetQualityScore(rated.FeatureVector), otherBefore = winner.GetQualityScore(other.FeatureVector);
+
+        new RouterTrainer(0.05f).Train(Trace(rated, winner, Element(rated, "соперник", 0.55, 1)),
+            new Feedback { FType = FeedbackType.Human, FeadbackScore = 0, Reasons = FeedbackReason.Errors });
+
+        Assert.True(ratedBefore - winner.GetQualityScore(rated.FeatureVector) > otherBefore - winner.GetQualityScore(other.FeatureVector));
+    }
+
     /// <summary>Штраф усредняется по соперникам: ход с тремя одинаковыми соперниками учит так же, как с одним</summary>
     [Fact]
     public void Penalty_is_averaged_over_rivals()
@@ -181,6 +221,17 @@ public class TrainingTests(ITestOutputHelper output)
             sum += task;
 
         return sum / tasks.Length;
+    }
+
+    /// <summary>Прогноз победителя (0,6 до шага) после дизлайка с причинами</summary>
+    private static double DislikedQuality(InputFeatures features, FeedbackReason reasons)
+    {
+        var winner = Element(features, "победитель", 0.6, 1);
+
+        new RouterTrainer(0.05f).Train(Trace(features, winner, Element(features, "соперник", 0.55, 1)),
+            new Feedback { FType = FeedbackType.Human, FeadbackScore = 0, Reasons = reasons });
+
+        return winner.GetQualityScore(features.FeatureVector);
     }
 
     private static double FitError(BenchmarkSnapshot snapshot, string[] models, Vector? mean) =>

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from fai_router.enums import FeedbackType
+from fai_router.enums import FeedbackReason, FeedbackType
 from fai_router.settings import Settings
 from fai_router.specifications import Specifications
 
@@ -81,9 +81,24 @@ class Tracert:
     bar_reached: bool | None = None
 
 
+# Во сколько раз выдуманные факты учат сильнее прочих причин по содержанию: выдумку человек принимает
+# за правду и несет дальше. Величина не измерялась; та же, что Feedback.MadeUpWeight в версии на C#
+MADE_UP_WEIGHT = 1.5
+
+
 @dataclass
 class Feedback:
-    """Отзыв на результат."""
+    """Отзыв на результат. Причины reasons учитываются только у отрицательного отзыва (quality_weight)."""
 
     ftype: FeedbackType = FeedbackType.AUTO
     score: float = 0.0
+    reasons: FeedbackReason = FeedbackReason.NONE
+
+    @staticmethod
+    def quality_weight(reasons: FeedbackReason) -> float:
+        """Множитель силы отрицательного отзыва по причинам: без причин единица, только форма ноль
+        (вкус человека, а не качество модели), содержание единица, выдуманные факты MADE_UP_WEIGHT."""
+        content = reasons & FeedbackReason.CONTENT
+        if not content:
+            return 1.0 if reasons == FeedbackReason.NONE else 0.0
+        return MADE_UP_WEIGHT if content & FeedbackReason.MADE_UP else 1.0

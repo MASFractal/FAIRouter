@@ -3,7 +3,7 @@ import random
 import numpy as np
 
 from fai_router import env
-from fai_router.enums import FeedbackType, Style
+from fai_router.enums import FeedbackReason, FeedbackType, Style
 from fai_router.judge import Judge
 from fai_router.routed_element import RoutedElement
 from fai_router.services import InputFeaturesService
@@ -191,6 +191,33 @@ def test_dislike_moves_the_winner_down():
     winner = rated(task_features, "победитель", 0.6)
     RouterTrainer(0.05).train(trace_of(task_features, winner, rated(task_features, "соперник", 0.55)), DISLIKE)
     assert winner.get_quality_score(task_features.feature_vector()) < 0.6
+
+
+def disliked_quality(task_features, reasons):
+    """Прогноз победителя (0,6 до шага) после дизлайка с причинами."""
+    winner = rated(task_features, "победитель", 0.6)
+    RouterTrainer(0.05).train(trace_of(task_features, winner, rated(task_features, "соперник", 0.55)),
+                              Feedback(FeedbackType.HUMAN, 0.0, reasons))
+    return winner.get_quality_score(task_features.feature_vector())
+
+
+def test_made_up_facts_penalize_harder_than_errors():
+    task_features = scene_task()
+    errors = disliked_quality(task_features, FeedbackReason.ERRORS)
+    made_up = disliked_quality(task_features, FeedbackReason.MADE_UP)
+    assert made_up < errors < 0.6
+    assert disliked_quality(task_features, FeedbackReason.OFF_TOPIC) == pytest.approx(
+        disliked_quality(task_features, FeedbackReason.NONE), abs=1e-12)
+
+
+def test_form_only_dislike_keeps_the_quality():
+    """Претензия только к объему и стилю это вкус человека: прогноз качества модели не меняется."""
+    task_features = scene_task()
+    assert disliked_quality(task_features, FeedbackReason.TOO_LONG | FeedbackReason.STYLE) == pytest.approx(0.6, abs=1e-12)
+    assert disliked_quality(task_features, FeedbackReason.ERRORS | FeedbackReason.TOO_SHORT) == pytest.approx(
+        disliked_quality(task_features, FeedbackReason.ERRORS), abs=1e-12)
+    assert Feedback.quality_weight(FeedbackReason.FORM) == 0.0
+    assert Feedback.quality_weight(FeedbackReason.NONE) == 1.0
 
 
 def test_penalty_is_averaged_over_rivals():
