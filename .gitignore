@@ -479,3 +479,4 @@ __pycache__/
 # Сборка пакета fai-router
 /Python/dist/
 /Python/build/
+/CSharp/src/FAI.Router/artifacts/webtests
