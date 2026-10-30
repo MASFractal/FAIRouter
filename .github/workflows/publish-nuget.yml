@@ -50,4 +50,9 @@ jobs:
         shell: pwsh
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
-        run: dotnet nuget push artifacts/nuget/*.nupkg --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
+        # Полный путь обязателен: на Windows шаблон с прямыми слешами дает "File does not exist"
+        run: |
+          foreach ($package in Get-ChildItem artifacts/nuget/*.nupkg) {
+            dotnet nuget push $package.FullName --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
