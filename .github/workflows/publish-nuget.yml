@@ -1,0 +1,53 @@
+# Публикация пакета FAI.Router на nuget.org. Запуск только вручную (Actions, publish-nuget, Run
+# workflow): выложенную версию нельзя удалить, только скрыть. Без галочки publish пакет проходит
+# тесты и собирается, но никуда не выкладывается. Версия задается в FAI.Router.csproj, уже
+# выложенная версия пропускается. Ключ не нужен: nuget.org выдает временный ключ на час по политике
+# Trusted Publishing учетной записи ZaharPonimash (owner MASFractal, repo FAIRouter, workflow
+# publish-nuget.yml, шаблон FAI*).
+name: publish-nuget
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Выложить на nuget.org"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - run: dotnet test CSharp/tests/FAI.Router.Tests -c Release --nologo
+      - run: dotnet pack CSharp/src/FAI.Router/FAI.Router.csproj -c Release --nologo -o artifacts/nuget
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nuget-package
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    needs: pack
+    if: inputs.publish
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { name: nuget-package, path: artifacts/nuget }
+      - name: Временный ключ nuget.org
+        id: login
+        uses: NuGet/login@v1
+        with: { user: ZaharPonimash }
+      - name: Выкладка
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push artifacts/nuget/*.nupkg --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate

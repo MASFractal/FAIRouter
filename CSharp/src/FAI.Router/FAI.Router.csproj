@@ -6,6 +6,31 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- Пакет NuGet. Описание на английском: по нему ищет nuget.org. Содержимое опубликованной версии
+       изменить нельзя, поэтому правки текста и иконки выходят только новой версией -->
+  <PropertyGroup>
+    <PackageId>FAI.Router</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>MASFractal</Authors>
+    <Copyright>Copyright (c) MASFractal</Copyright>
+    <Description>Picks the right LLM, agent or tool for each request and checks what it delivered. FAIRouter filters out executors that are predicted to fall short of the required quality, chooses by price and speed among the rest, measures the answer with a built-in judge and learns from feedback.</Description>
+    <PackageTags>llm;routing;model-router;ai;agents;openai;openrouter;evaluation;machine-learning;dotnet</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MASFractal/FAIRouter</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MASFractal/FAIRouter</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\nuget\icon.png" Pack="true" PackagePath="" Visible="false" />
+    <None Include="..\..\nuget\README.md" Pack="true" PackagePath="" Visible="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="AI" Version="4.0.0" />
     <PackageReference Include="AI.LLM" Version="4.0.0" />

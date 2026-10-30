@@ -6,6 +6,7 @@
 
 Реализация на C#: библиотека `FAI.Router` и стенды для измерений
 
+[![NuGet](https://img.shields.io/nuget/v/FAI.Router?style=flat-square&color=1E90FF&label=NuGet&logo=nuget)](https://www.nuget.org/packages/FAI.Router)
 [![.NET](https://img.shields.io/badge/.NET-10.0-1E90FF?style=flat-square&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![Stars](https://img.shields.io/github/stars/MASFractal/FAIRouter?style=flat-square&color=1E90FF&logo=github)](https://github.com/MASFractal/FAIRouter/stargazers)
 [![License](https://img.shields.io/github/license/MASFractal/FAIRouter?style=flat-square&color=1E90FF)](../LICENSE)
@@ -41,6 +42,19 @@ CSharp/
 
 Пространство имен совпадает с каталогом, отсюда `FAI.Router.JudgeLogic`, `FAI.Router.Training` и так
 далее.
+
+## Установка
+
+Библиотека опубликована на [nuget.org](https://www.nuget.org/packages/FAI.Router), понадобится **.NET 10**:
+
+```bash
+dotnet add package FAI.Router
+```
+
+Новая версия выходит так: поменять `Version` в `FAI.Router.csproj` и запустить рабочий процесс
+`publish-nuget` на вкладке Actions, сначала без галочки `publish`, затем с ней. Описание пакета лежит
+в том же файле проекта, README и иконка в `CSharp/nuget`. Выложенную версию нельзя удалить или
+изменить, поэтому правки текста выходят только новой версией.
 
 ## Сборка
 

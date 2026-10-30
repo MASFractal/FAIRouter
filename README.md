@@ -13,6 +13,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/MASFractal/FAIRouter?style=flat-square&color=40E0D0)](https://github.com/MASFractal/FAIRouter/commits)
 [![License](https://img.shields.io/github/license/MASFractal/FAIRouter?style=flat-square&color=1E90FF)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-1E90FF?style=flat-square&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![NuGet](https://img.shields.io/nuget/v/FAI.Router?style=flat-square&color=1E90FF&label=NuGet&logo=nuget)](https://www.nuget.org/packages/FAI.Router)
 
 <img src="docs/logo/demo.gif" alt="FAIRouter: выбор исполнителя и приемка ответа судьей" width="640">
 
@@ -689,7 +690,13 @@ print(Judge.criticize(trace.requested_spec, actual))
 
 ### C#
 
-Понадобится .NET 10. Пакеты AIFramework восстанавливаются из NuGet при первой сборке.
+Понадобится .NET 10. Готовая библиотека опубликована на [nuget.org](https://www.nuget.org/packages/FAI.Router):
+
+```bash
+dotnet add package FAI.Router
+```
+
+Для сборки из исходников пакеты AIFramework восстанавливаются из NuGet при первой сборке:
 
 ```bash
 dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
