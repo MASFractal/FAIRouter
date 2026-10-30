@@ -158,7 +158,11 @@ pip install "git+https://github.com/MASFractal/FAIRouter#subdirectory=Python"
 `FailureCooldown` в C#). Ключ поставщика опознается по виду (`sk-or-`, `rtr_`, `frr_`); незнакомый
 ключ это ошибка, а не ключ FractalRouter по умолчанию.
 
-C#:
+C#. Пакет опубликован на [NuGet](https://www.nuget.org/packages/FAI.Router), понадобится .NET 10:
+
+```bash
+dotnet add package FAI.Router
+```
 
 ```csharp
 FaiRouter router = await FaiRouter.FromFractalRouterAsync(
