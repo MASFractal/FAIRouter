@@ -1,5 +1,4 @@
 <Solution>
-  <Project Path="../../../../AIFramework3Open/src/AI/AI.csproj" />
   <Project Path="../../src/FAI.Router/FAI.Router.csproj" />
   <Project Path="MainTest/MainTest.csproj" />
 </Solution>

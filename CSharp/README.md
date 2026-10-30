@@ -44,14 +44,8 @@ CSharp/
 
 ## Сборка
 
-Понадобится **.NET 10** и репозиторий `AIFramework3Open`, который должен лежать рядом с `FAIRouter`.
-Ссылки на него относительные, поэтому без соседнего репозитория проект не соберется.
-
-```
-GA/
-├── FAIRouter/
-└── AIFramework3Open/
-```
+Понадобится **.NET 10**. Пакеты AIFramework восстанавливаются из NuGet при первой сборке, отдельно
+скачивать репозиторий фреймворка не нужно.
 
 ```bash
 dotnet build CSharp/src/FAI.Router/FAI.Router.csproj
@@ -61,7 +55,7 @@ dotnet test CSharp/tests/FAI.Router.Tests
 Каталог `Catalog/Sources` (забор снимка замеров с площадок рейтингов) лежит вне репозитория и в
 сборку не входит (`Compile Remove` в проекте): библиотеке нужен только готовый снимок.
 
-| Ссылка | Зачем |
+| Пакет | Зачем |
 |---|---|
 | `AI` | `Vector`, `Matrix` |
 | `AI.LLM` | клиент поставщика по протоколу OpenAI (FractalRouter, OpenRouter), структурированный ответ по схеме |
@@ -69,7 +63,7 @@ dotnet test CSharp/tests/FAI.Router.Tests
 | `AI.NeuralNetworks` | автоматическое дифференцирование для обучения матрицы судьи (пространство имен `AI.ML.NeuralNetworks.V2`) |
 | `Microsoft.Data.Sqlite` | хранилище весов и журнала ходов |
 
-Единственным пакетом остается `Microsoft.Data.Sqlite`, остальное подключается ссылками на проекты.
+Все зависимости подключаются пакетами NuGet, версия AIFramework указана в `FAI.Router.csproj`.
 
 ## Ключевые типы
 
