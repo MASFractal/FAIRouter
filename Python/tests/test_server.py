@@ -125,6 +125,7 @@ def test_feedback_path_and_saving_only_trained(recorded, tmp_path):
     try:
         status, data = post(f"{base}/chat/completions", {"messages": [{"role": "user", "content": "привет"}]})
         round_id = data["fai_router"]["round_id"]
+        assert set(data["fai_router"]["cost"]) == {"answer", "judge", "retries", "total", "estimated"}
         assert post(f"{base}/feedback", {"round_id": round_id, "score": 0.9}) == (200, {"ok": True, "round_id": round_id})
         assert post(f"{base}/feedback", {"round_id": round_id, "score": 7})[0] == 400
         assert post(f"{base}/feedback", {"round_id": 999, "score": 0.5})[0] == 400

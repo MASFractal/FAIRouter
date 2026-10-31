@@ -203,6 +203,13 @@ public static class ModelCatalog
     }
 
     /// <summary>
+    /// Цена модели; пусто, если модели нет или цена неизвестна
+    /// </summary>
+    /// <param name="model">Модель из каталога</param>
+    public static Price? PriceOf(ModelInfo? model) =>
+        model is { DollarsPerMillionInput: >= 0, DollarsPerMillionOutput: >= 0 } ? new Price(model.DollarsPerMillionInput, model.DollarsPerMillionOutput) : null;
+
+    /// <summary>
     /// Читает ранее сохраненный снимок каталога
     /// </summary>
     /// <param name="path">Путь к файлу снимка</param>

@@ -85,6 +85,13 @@ def fetch_or_popular(fetch_catalog: Callable[[], Iterable[ModelInfo]]) -> list[M
         return popular_model_infos()
 
 
+def price_of(model: ModelInfo | None) -> tuple[float, float] | None:
+    """Цена модели (вход, выход) за миллион токенов; None, если модели нет или цена неизвестна."""
+    if model is None or model.dollars_per_million_input < 0 or model.dollars_per_million_output < 0:
+        return None
+    return model.dollars_per_million_input, model.dollars_per_million_output
+
+
 def popular_models() -> list[str]:
     """Идентификаторы популярных моделей из комплекта: модели с внешними рейтингами в снимке
     замеров и недорогие рабочие лошадки. Это выбор по умолчанию, когда модели не названы."""

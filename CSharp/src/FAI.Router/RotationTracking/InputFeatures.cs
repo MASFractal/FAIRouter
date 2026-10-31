@@ -30,6 +30,11 @@ public class InputFeatures
     /// </summary>
     public int TurnCount { get; set; } = 1;
 
+    /// <summary>
+    /// Ожидаемый расход судьи на этот ход: общая для всех кандидатов часть цены выбора
+    /// </summary>
+    public double JudgeCost { get; set; }
+
     public Specifications InputSpecifications { get; set; } = new Specifications();
 
     /// <summary>

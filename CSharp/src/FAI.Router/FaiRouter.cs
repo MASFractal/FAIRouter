@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AI.LLM.Core.Models.Common.Messages;
+using AI.LLM.Core.Models.Common.Responses;
 using AI.LLM.Services.LLM;
 using FAI.Router.Catalog;
 using FAI.Router.Enums;
@@ -68,6 +69,12 @@ public class FaiRouter
     /// Без паузы модель, отвечающая ошибкой сервера, выбиралась снова на каждом ходе.
     /// </summary>
     public TimeSpan FailureCooldown { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Цена модели судьи; фабрики берут ее из prices и каталога. Не задана, тогда итог хода неизвестен:
+    /// расход судьи есть, а умножить его не на что.
+    /// </summary>
+    public Price? JudgePrice { get; set; }
 
     /// <summary>
     /// Роутер целиком; исполнитель без токена отмены
@@ -286,12 +293,15 @@ public class FaiRouter
 
         ConcurrentDictionary<string, LLMBase> clients = new();
 
-        Task<string> Execute(BaseRoutedElement candidate, IReadOnlyList<LLMMessage> messages, CancellationToken token)
+        async Task<string> Execute(BaseRoutedElement candidate, IReadOnlyList<LLMMessage> messages, CancellationToken token)
         {
             string name = candidate.Name ?? throw new InvalidOperationException("Кандидат без имени: не у кого спрашивать.");
             LLMBase client = clients.GetOrAdd(name, id => new OpenAiCompatibleLlm(baseUrl, apiKey, id));
+            ChatCompletionsResponse response = await client.SendToLLMFull(messages, cancellationToken: token).ConfigureAwait(false);
 
-            return client.SendToLLM(messages, cancellationToken: token);
+            Bill.Current?.Report(response.Usage);
+
+            return response.Choices?.FirstOrDefault()?.Message?.Content?.ToString() ?? "";
         }
 
         // Все кандидаты стартуют с начальных весов по рейтингам: долгая разведка не нужна, и множитель
@@ -299,7 +309,10 @@ public class FaiRouter
         bool informed = candidates.All(candidate => candidate.PriorExperience > 0);
 
         return new FaiRouter(candidates, Execute, databasePath, topk, measure, contentJudge, weights, bar,
-            temperatureScale: informed ? Settings.PriorTemperatureScale : null, llm: judge);
+            temperatureScale: informed ? Settings.PriorTemperatureScale : null, llm: judge)
+        {
+            JudgePrice = prices.GetValueOrDefault(judgeModel) ?? ModelCatalog.PriceOf(known.GetValueOrDefault(judgeModel))
+        };
     }
 
     /// <summary>
@@ -338,14 +351,17 @@ public class FaiRouter
             throw new ArgumentException("В диалоге нет сообщения пользователя, задачу распознать не из чего.", nameof(messages));
 
         double inputTokens = dialog.Sum(message => (message.Content as string)?.Length ?? 0) / InputFeaturesService.EST_SYMBOL_PER_TOKEN;
+        double taskTokens = prompt.Length / InputFeaturesService.EST_SYMBOL_PER_TOKEN;
+        Bill bill = Bill.Open();
         Tracert trace = await Env.RouteAsync(prompt, Available(), _topk, required, WeightsFor(weights), asked.Length,
-            SufficiencyBarFor(bar), _recognizer, inputTokens, _random, cancellationToken).ConfigureAwait(false);
+            SufficiencyBarFor(bar), _recognizer, inputTokens, _random, cancellationToken,
+            features => Bill.ExpectedJudgeCost(taskTokens, features.LenAnswer, JudgePrice, _measure)).ConfigureAwait(false);
 
         string text;
 
         try
         {
-            text = await Env.ExecuteAsync(trace, candidate => _execute(candidate, dialog, cancellationToken), cancellationToken).ConfigureAwait(false);
+            text = await Env.ExecuteAsync(trace, candidate => RunAsync(candidate, dialog, inputTokens, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -384,7 +400,7 @@ public class FaiRouter
 
         long? roundId = _memory?.Append(trace, actual, prompt, assessment);
 
-        return new RouterAnswer(text, trace.Winner, trace, trace.RequestedSpec, actual, score, critic, roundId, content, assessment, trace.BarReached);
+        return new RouterAnswer(text, trace.Winner, trace, trace.RequestedSpec, actual, score, critic, roundId, content, assessment, trace.BarReached, bill.Total(JudgePrice));
     }
 
     /// <summary>
@@ -484,6 +500,16 @@ public class FaiRouter
     /// размерности пропускается с предупреждением, остальные загружаются.
     /// </summary>
     public void Load() => Memory().Load();
+
+    // Расход идет в счет хода до проверки ответа: за пустой ответ поставщик тоже берет деньги
+    private async Task<string> RunAsync(BaseRoutedElement candidate, LLMMessage[] dialog, double inputTokens, CancellationToken cancellationToken)
+    {
+        string text = await _execute(candidate, dialog, cancellationToken).ConfigureAwait(false);
+
+        Bill.Current?.Attempted(candidate, text, inputTokens);
+
+        return text;
+    }
 
     // Кандидаты без недавнего отказа; отказали все, тогда все: пауза не повод остаться без исполнителя
     private BaseRoutedElement[] Available()

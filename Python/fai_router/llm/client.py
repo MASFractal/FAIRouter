@@ -155,7 +155,7 @@ class OpenRouterClient:
     def usage(data: dict[str, Any]) -> tuple[int, int]:
         """Токены входа и выхода из полного ответа."""
         usage = data.get("usage") or {}
-        return int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
+        return int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
 
 
 def _read_error(error: urllib.error.HTTPError) -> str:

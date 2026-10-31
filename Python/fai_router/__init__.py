@@ -11,11 +11,12 @@ from fai_router.tracking import Feedback, InputFeatures, Tracert
 from fai_router import env
 from fai_router.memory import TrainingLoss
 from fai_router.router import Completion, FaiRouter, RouterAnswer
+from fai_router.spending import RoundCost
 
 __all__ = [
     "Capability", "FeedbackReason", "FeedbackType", "Style", "Domain", "ProgrammingLanguage", "ScienceField", "TaskKind",
     "RouteWeights", "Settings", "SufficiencyBar", "Specifications",
     "DiffSpec", "SpecDeviation", "ContentReview", "ContentCriterion", "FactClaim", "PointCoverage", "ConstraintCheck", "Judge", "RoutedElement",
     "Feedback", "InputFeatures", "Tracert", "env",
-    "FaiRouter", "RouterAnswer", "Completion", "TrainingLoss",
+    "FaiRouter", "RouterAnswer", "Completion", "RoundCost", "TrainingLoss",
 ]

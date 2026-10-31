@@ -36,6 +36,7 @@ RouterAnswer answer = await router.AskAsync("Write a 1500-character overview of 
 Console.WriteLine($"{answer.Winner.Name}: {answer.Score}");
 Console.WriteLine(answer.Text);
 Console.WriteLine(answer.Critic);                   // differences from the request, item by item
+Console.WriteLine($"{answer.Cost?.Answer} of {answer.Cost?.Total}"); // answer price and the total with judge and retries
 
 router.Feedback(answer.RoundId!.Value, score: 1.0); // from 0 (bad) to 1 (excellent)
 router.Train(epochs: 10);

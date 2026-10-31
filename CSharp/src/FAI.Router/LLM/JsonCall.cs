@@ -51,8 +51,10 @@ internal static class JsonCall
 
         for (int attempt = 0; attempt < Attempts; attempt++)
         {
-            Choice? choice = (await SendAsync(llm, messages, settings, budget, deadline, cancellationToken).ConfigureAwait(false))
-                .Choices?.FirstOrDefault();
+            ChatCompletionsResponse response = await SendAsync(llm, messages, settings, budget, deadline, cancellationToken).ConfigureAwait(false);
+            Choice? choice = response.Choices?.FirstOrDefault();
+            string? text = choice?.Message?.Content?.ToString();
+            Bill.Current?.Served(response.Usage, messages, settings, text, repeat: attempt > 0);
 
             if (IsCut(choice))
             {
@@ -60,7 +62,7 @@ internal static class JsonCall
                 continue;
             }
 
-            if (Parse(choice?.Message?.Content?.ToString(), parse) is { } result)
+            if (Parse(text, parse) is { } result)
                 return result;
 
             failure = "ответ не по схеме";

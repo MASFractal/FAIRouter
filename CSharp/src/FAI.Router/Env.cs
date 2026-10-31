@@ -66,6 +66,7 @@ public static class Env
     /// <param name="inputTokens">Объем входа всего диалога в токенах; пусто, значит по тексту запроса</param>
     /// <param name="random">Генератор жребия; пусто, значит общий</param>
     /// <param name="cancellationToken">Токен отмены</param>
+    /// <param name="judgeCost">Оценка расхода судьи на ход по признакам с распознанным объемом: он входит в цену выбора</param>
     public static async Task<Tracert> RouteAsync(
         string textPrompt,
         IEnumerable<BaseRoutedElement> elements,
@@ -77,7 +78,8 @@ public static class Env
         ISpecService? specs = null,
         double? inputTokens = null,
         Random? random = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<InputFeatures, double>? judgeCost = null)
     {
         BaseRoutedElement[] candidates = [.. elements];
 
@@ -101,6 +103,8 @@ public static class Env
 
         if (inputTokens is > 0)
             features.InputLen = inputTokens.Value;
+
+        features.JudgeCost = judgeCost?.Invoke(features) ?? 0;
 
         Tracert trace = bar is null
             ? Choose(features, candidates, topk, required, weights, random)
@@ -382,10 +386,11 @@ public static class Env
     // цены был в 1156 раз меньше вклада качества. Приведение каждого слагаемого к нулевому среднему
     // и единичному разбросу внутри группы делает веса WQ, WC и Wt долями важности сравнимых величин.
     // Деление на длину вектора весов делает R безразмерной: температура не зависит от того, как
-    // именно заданы веса
+    // именно заданы веса. Цена выбора это цена ответа плюс расход судьи: сравниваются итоги задачи, а
+    // не только ответы
     private static List<(double Score, BaseRoutedElement Element)> Rank(InputFeatures features, BaseRoutedElement[] fit, double[] quality, int topk, RouteWeights w)
     {
-        double[] costs = [.. fit.Select(element => element.HasKnownPrice ? element.GetCost(features) : double.NaN)];
+        double[] costs = [.. fit.Select(element => element.HasKnownPrice ? element.GetCost(features) + features.JudgeCost : double.NaN)];
         double floor = CostFloor(costs);
 
         double[] q = Standardize(quality, lowIsWorst: true, MinQualityDeviation);

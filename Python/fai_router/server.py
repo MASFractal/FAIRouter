@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import uuid
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -93,7 +94,8 @@ class RouterHandler(BaseHTTPRequestHandler):
                       "total_tokens": answer.prompt_tokens + answer.completion_tokens},
             "fai_router": {"round_id": answer.round_id, "score": answer.score, "assessment": answer.assessment,
                            "exploration": answer.trace.is_exploration, "reached": answer.reached,
-                           "failed": answer.trace.failed, "context_shortfall": answer.trace.context_shortfall},
+                           "failed": answer.trace.failed, "context_shortfall": answer.trace.context_shortfall,
+                           "cost": asdict(answer.cost)},
         }
         if body.get("stream"):
             self._stream(payload)

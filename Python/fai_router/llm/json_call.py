@@ -12,6 +12,7 @@ import json
 import time
 from typing import Any, Callable, TypeVar
 
+from fai_router import spending
 from fai_router.llm.client import OpenRouterClient
 
 T = TypeVar("T")
@@ -33,11 +34,11 @@ def ask(llm: Any, messages: list[dict[str, Any]], schema_name: str, schema: dict
     все попытки вместе: у клиента своего потолка на весь ход нет."""
     deadline = time.monotonic() + budget
     failure = ""
-    for _ in range(ATTEMPTS):
+    for attempt in range(ATTEMPTS):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Модель не ответила за {budget:.0f} с.")
-        text, cut = _send(llm, messages, schema_name, schema, remaining)
+        text, cut = _send(llm, messages, schema_name, schema, remaining, attempt > 0)
         if cut:
             failure = "ответ обрезан по потолку токенов"
             continue
@@ -68,19 +69,23 @@ def parse_answer(text: str | None, parse: Callable[[str], T | None]) -> T | None
 
 
 def _send(llm: Any, messages: list[dict[str, Any]], schema_name: str, schema: dict[str, Any],
-          remaining: float) -> tuple[str, bool]:
-    """Текст ответа и признак обрезки. Свой клиент получает остаток бюджета; клиент без полного
-    ответа (только complete) обрезки не сообщает."""
+          remaining: float, repeat: bool) -> tuple[str, bool]:
+    """Текст ответа и признак обрезки; расход записывается в счет хода, повтор отдельно. Свой клиент
+    получает остаток бюджета; клиент без полного ответа (только complete) обрезки не сообщает."""
     options = {"schema": schema, "schema_name": schema_name, "temperature": 0.0, "max_tokens": MAX_TOKENS}
     if isinstance(llm, OpenRouterClient):
         data = llm.complete_full(messages, budget=remaining, **options)
     elif hasattr(llm, "complete_full"):
         data = llm.complete_full(messages, **options)
     else:
-        return str(llm.complete(messages, **options) or ""), False
+        text = str(llm.complete(messages, **options) or "")
+        spending.note_service((0, 0), messages, schema, text, repeat)
+        return text, False
     choice = ((data or {}).get("choices") or [{}])[0] or {}
     content = (choice.get("message") or {}).get("content")
-    return (content if isinstance(content, str) else json.dumps(content) if content else ""), _is_cut(choice)
+    text = content if isinstance(content, str) else json.dumps(content) if content else ""
+    spending.note_service(OpenRouterClient.usage(data or {}), messages, schema, text, repeat)
+    return text, _is_cut(choice)
 
 
 def _is_cut(choice: dict[str, Any]) -> bool:

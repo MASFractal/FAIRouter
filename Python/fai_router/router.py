@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import logging
 import math
@@ -14,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from fai_router import catalog as catalog_module
-from fai_router import env
+from fai_router import env, spending
 from fai_router.content_review import ContentReview
 from fai_router.diff_spec import DiffSpec
 from fai_router.enums import Capability
@@ -25,6 +26,7 @@ from fai_router.memory import CalibrationState, RouterMemory, TrainingLoss
 from fai_router.routed_element import RoutedElement
 from fai_router.services import InputFeaturesService, SpecInputService, SpecOutputService
 from fai_router.settings import RouteWeights, Settings, SufficiencyBar
+from fai_router.spending import RoundCost
 from fai_router.specifications import Specifications
 from fai_router.tracking import Tracert
 
@@ -91,6 +93,8 @@ class RouterAnswer:
     # при недоборе и человека стоит предупредить; None, если выбор шел без планки
     reached: bool | None = None
     finish_reason: str = "stop"
+    # Во что обошелся ход: ответ, судья, повторы и итог задачи
+    cost: RoundCost | None = None
 
 
 class FaiRouter:
@@ -113,6 +117,7 @@ class FaiRouter:
         temperature_scale: float | None = None,
         seed: int | None = None,
         failure_cooldown: float = 300.0,
+        judge_price: tuple[float, float] | None = None,
     ):
         if isinstance(bar, (int, float)) and not 0.0 <= bar <= 1.0:
             raise ValueError(f"Планка {bar} вне диапазона: нужна вероятность лайка от 0 до 1.")
@@ -140,6 +145,9 @@ class FaiRouter:
         # На сколько секунд отказавший кандидат (ошибка, таймаут, пустой ответ) выпадает из выбора.
         # Без паузы модель, отвечающая ошибкой сервера, выбиралась снова на каждом ходе
         self.failure_cooldown = failure_cooldown
+        # Цена модели судьи (вход, выход) за миллион токенов; фабрики берут ее из prices и каталога.
+        # Не задана, тогда итог хода неизвестен: расход судьи есть, а умножить его не на что
+        self.judge_price = judge_price
         self._failed_until: dict[str, float] = {}
         self._execute = execute
         self._takes_options = _accepts(execute, 3)
@@ -232,7 +240,8 @@ class FaiRouter:
         Цены кандидатов берутся из каталога catalog_fetch (по умолчанию каталог OpenRouter), а
         prices, (вход, выход) за миллион токенов в валюте поставщика, их задает или заменяет. Модель
         без цены ни там, ни там это ошибка: без цены роутеру нечего взвешивать. Каталог недоступен по
-        сети, тогда цены берутся из комплекта пакета.
+        сети, тогда цены берутся из комплекта пакета. Цена судьи для итога хода ищется там же; когда
+        цены всех кандидатов заданы руками, каталог не читается, и судью стоит добавить в prices.
 
         Начальные веса кандидатов берутся из снимка внешних замеров (benchmarks: снимок, путь к
         нему или None для снимка из комплекта), поэтому роутер небесполезен с первого хода, а
@@ -291,6 +300,7 @@ class FaiRouter:
         if Settings.llm is None:
             Settings.llm = judge
         kwargs.setdefault("llm", judge)
+        kwargs.setdefault("judge_price", prices.get(judge_model) or catalog_module.price_of(known.get(judge_model)))
         return cls(candidates, execute, database_path, **kwargs)
 
     def ask(self, prompt: str, required: Capability = Capability.NONE,
@@ -324,23 +334,28 @@ class FaiRouter:
 
         input_tokens = sum(len(text_of(message.get("content"))) for message in messages) \
             / InputFeaturesService.EST_SYMBOL_PER_TOKEN
-        trace = env.route(prompt, self._available(), self.topk, required,
-                          weights=self.weights_for(weights), turns=len(asked),
-                          bar=self.sufficiency_bar(bar), specs=self._recognizer,
-                          input_tokens=input_tokens, rng=self._random)
-        options = _options(trace.requested_spec, max_tokens, temperature)
-        try:
-            completion = env.execute(trace, lambda candidate: self._run(candidate, messages, options))
-        finally:
-            for name in trace.failed:
-                self._failed_until[name] = time.monotonic() + self.failure_cooldown
+        task_tokens = len(prompt) / InputFeaturesService.EST_SYMBOL_PER_TOKEN
+        with spending.open_bill() as bill:
+            trace = env.route(prompt, self._available(), self.topk, required,
+                              weights=self.weights_for(weights), turns=len(asked),
+                              bar=self.sufficiency_bar(bar), specs=self._recognizer,
+                              input_tokens=input_tokens, rng=self._random,
+                              judge_cost=lambda features: spending.expected_judge_cost(
+                                  task_tokens, features.len_answer, self.judge_price, self.measure))
+            options = _options(trace.requested_spec, max_tokens, temperature)
+            try:
+                completion = env.execute(trace, lambda candidate: self._run(candidate, messages, options, input_tokens))
+            finally:
+                for name in trace.failed:
+                    self._failed_until[name] = time.monotonic() + self.failure_cooldown
 
-        answer = RouterAnswer(completion.text, trace.winner.name, trace, trace.requested_spec,
-                              prompt_tokens=completion.prompt_tokens,
-                              completion_tokens=completion.completion_tokens,
-                              reached=trace.bar_reached, finish_reason=completion.finish_reason)
-        if self.measure and trace.requested_spec is not None:
-            self._measure(answer, prompt)
+            answer = RouterAnswer(completion.text, trace.winner.name, trace, trace.requested_spec,
+                                  prompt_tokens=completion.prompt_tokens,
+                                  completion_tokens=completion.completion_tokens,
+                                  reached=trace.bar_reached, finish_reason=completion.finish_reason)
+            if self.measure and trace.requested_spec is not None:
+                self._measure(answer, prompt)
+        answer.cost = bill.cost(self.judge_price)
         if self.memory is not None:
             answer.round_id = self.memory.append(trace, answer.actual, prompt, answer.assessment)
         return answer
@@ -424,9 +439,11 @@ class FaiRouter:
         исполнитель уже ответил, и этот ответ дороже оценки. Ход без замера идет в журнал без
         автоотзыва. В журнал процесса пишется только тип ошибки: ее текст может нести запрос."""
         try:
+            # Пул не переносит контекст в свои потоки, а счет хода лежит в нем
             with ThreadPoolExecutor(max_workers=2) as pool:
-                measuring = pool.submit(self._measurer.get_specifications, answer.text)
-                reviewing = pool.submit(self.content_judge.review, prompt, answer.requested, answer.text)
+                measuring = pool.submit(contextvars.copy_context().run, self._measurer.get_specifications, answer.text)
+                reviewing = pool.submit(contextvars.copy_context().run, self.content_judge.review,
+                                        prompt, answer.requested, answer.text)
                 actual, content = measuring.result(), reviewing.result()
             answer.score = self.judge.rate(answer.trace, answer.requested, actual)
             answer.critic = Judge.criticize(answer.requested, actual, content)
@@ -436,8 +453,10 @@ class FaiRouter:
             log.warning("Ответ получен, но замерить его не удалось (%s).", type(error).__name__)
             answer.actual = answer.content = answer.score = answer.critic = answer.assessment = None
 
-    def _run(self, candidate: RoutedElement, messages: Messages, options: dict[str, Any]) -> Completion:
-        """Ответ кандидата; потолок ответа не выше предела кандидата, если тот известен."""
+    def _run(self, candidate: RoutedElement, messages: Messages, options: dict[str, Any],
+             input_tokens: float) -> Completion:
+        """Ответ кандидата; потолок ответа не выше предела кандидата, если тот известен. Расход идет
+        в счет хода до проверки ответа: за пустой ответ поставщик тоже берет деньги."""
         if self._takes_options:
             own = dict(options)
             limit = int(candidate.context_limit / InputFeaturesService.EST_SYMBOL_PER_TOKEN)
@@ -446,7 +465,10 @@ class FaiRouter:
             result = self._execute(candidate, messages, own)
         else:
             result = self._execute(candidate, messages)
-        return Completion(result) if isinstance(result, str) else result
+        completion = Completion(result) if isinstance(result, str) else result
+        spending.note_attempt(candidate, completion.prompt_tokens, completion.completion_tokens, input_tokens,
+                              completion.text or "")
+        return completion
 
     def _available(self) -> list[RoutedElement]:
         """Кандидаты без недавнего отказа; отказали все, тогда все: пауза не повод остаться без исполнителя."""

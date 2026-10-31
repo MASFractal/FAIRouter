@@ -55,9 +55,11 @@ class SufficientTop:
 def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
           required: Capability = Capability.NONE, weights: RouteWeights | None = None,
           turns: int = 1, bar: SufficiencyBar | None = None, specs: SpecSource | None = None,
-          input_tokens: float | None = None, rng: random.Random | None = None) -> Tracert:
+          input_tokens: float | None = None, rng: random.Random | None = None,
+          judge_cost: Callable[[InputFeatures], float] | None = None) -> Tracert:
     """Полный ход роутинга: признаки запроса, соревнование кандидатов, трассировка.
-    Баллы в трассировке проставляет судья, после того как победитель ответит.
+    Баллы в трассировке проставляет судья, после того как победитель ответит. judge_cost оценивает
+    расход судьи на ход по признакам с распознанным объемом: он входит в цену выбора.
 
     Веса этого выбора; пусто, тогда общие из Settings. С планкой bar выбор идет по принципу
     «необходимо и достаточно» (choose_sufficient), без нее по метрике R (choose). specs распознает
@@ -75,6 +77,8 @@ def route(text_prompt: str, elements: Iterable[RoutedElement], topk: int = 5,
     features.turn_count = max(turns, 1)
     if input_tokens is not None and input_tokens > 0:
         features.input_len = input_tokens
+    if judge_cost is not None:
+        features.judge_cost = judge_cost(features)
     trace = (choose(features, candidates, topk, required, rng, weights) if bar is None
              else choose_sufficient(features, candidates, bar, topk, required, rng, weights))
     trace.requested_spec = recognized
@@ -253,8 +257,10 @@ def _rank(features: InputFeatures, fit: list[RoutedElement], quality: list[float
     прежней формуле вклад цены был в 1156 раз меньше вклада качества: роутер выбирал, не глядя на
     деньги. Приведение каждого слагаемого к нулевому среднему и единичному разбросу внутри группы
     делает веса долями важности сравнимых величин. Деление на длину вектора весов делает R
-    безразмерной: температура не зависит от того, как именно заданы WQ, WC и WT."""
-    costs = [element.get_cost(features) if element.has_known_price else math.nan for element in fit]
+    безразмерной: температура не зависит от того, как именно заданы WQ, WC и WT. Цена выбора это
+    цена ответа плюс расход судьи: сравниваются итоги задачи, а не только ответы."""
+    costs = [element.get_cost(features) + features.judge_cost if element.has_known_price else math.nan
+             for element in fit]
     floor = _cost_floor(costs)
     q = _standardize(quality, True, MIN_QUALITY_DEVIATION)
     cost = _standardize([math.log(value + floor) if math.isfinite(value) else math.nan for value in costs],
