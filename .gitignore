@@ -480,3 +480,4 @@ __pycache__/
 /Python/dist/
 /Python/build/
 /CSharp/src/FAI.Router/artifacts/webtests
+/CSharp/src/FAI.Router/.testout
